@@ -249,6 +249,25 @@ def show_upload_analyze():
             with st.expander("View Data Preview"):
                 st.dataframe(df.head(10), use_container_width=True)
             
+            st.subheader("Model Reliability Options")
+            col_opt1, col_opt2 = st.columns(2)
+            with col_opt1:
+                tune_contamination = st.checkbox(
+                    "Auto-tune contamination from labels",
+                    value=False,
+                    help="Select best anomaly contamination using labeled/weak-labeled records."
+                )
+            with col_opt2:
+                use_weak_labels = st.checkbox(
+                    "Use weak labels if true labels absent",
+                    value=True
+                )
+            label_column = st.text_input(
+                "Label column (optional, binary 0/1)",
+                value="",
+                help="Example: is_corrupt, fraud_label, investigated_flag"
+            ).strip()
+            
             # Run analysis button
             if st.button("▶️ Run Complete Analysis", key='run_analysis', use_container_width=True):
                 with st.spinner("Analyzing data... This may take a minute"):
@@ -259,7 +278,12 @@ def show_upload_analyze():
                         
                         # Anomaly detection
                         anomaly_engine = AnomalyDetectionEngine(contamination=0.05)
-                        df = anomaly_engine.detect_anomalies(df)
+                        df = anomaly_engine.detect_anomalies(
+                            df,
+                            auto_tune=tune_contamination,
+                            label_column=label_column if label_column else None,
+                            use_weak_labels=use_weak_labels
+                        )
                         
                         # Network analysis
                         network_analyzer = NetworkAnalyzer()
@@ -267,7 +291,15 @@ def show_upload_analyze():
                         
                         # Risk scoring
                         risk_assessor = CorruptionRiskAssessor()
-                        risk_results = risk_assessor.assess_risk(df, network_results)
+                        risk_results = risk_assessor.assess_risk(
+                            df,
+                            network_results,
+                            calibration_config={
+                                'enabled': True,
+                                'label_column': label_column if label_column else None,
+                                'use_weak_labels': use_weak_labels
+                            }
+                        )
                         
                         st.session_state.analysis_results = {
                             'data': df,
@@ -277,6 +309,10 @@ def show_upload_analyze():
                         st.session_state.analysis_complete = True
                         
                         st.success("✓ Analysis complete! Navigate to other sections to view results.")
+                        if anomaly_engine.tuning_report:
+                            st.caption(f"Anomaly tuning: {anomaly_engine.tuning_report}")
+                        if 'calibration' in risk_results:
+                            st.caption(f"Calibration: {risk_results['calibration']}")
                         
                     except Exception as e:
                         st.error(f"Analysis failed: {str(e)}")
@@ -346,7 +382,8 @@ def show_risk_analysis():
     high_risk = high_risk.sort_values('final_risk_score', ascending=False)
     
     if len(high_risk) > 0:
-        display_cols = ['tender_id', 'price_anomaly', 'winner_concentration', 
+        display_cols = ['tender_id', 'price_anomaly', 'winner_concentration',
+                       'risk_probability',
                        'participation_anomaly', 'network_suspicion', 'final_risk_score', 'risk_category']
         available_cols = [col for col in display_cols if col in high_risk.columns]
         

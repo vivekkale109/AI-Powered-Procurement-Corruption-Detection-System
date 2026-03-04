@@ -66,6 +66,16 @@ risk_scoring:
     medium_risk: 0.40
     low_risk: 0.00
 
+# Model Reliability & Calibration
+model_reliability:
+  tune_contamination: true
+  contamination_candidates: [0.01, 0.03, 0.05, 0.08, 0.1, 0.12, 0.15, 0.2]
+  calibration_enabled: true
+  # Optional supervised label column, e.g., is_corrupt / fraud_label / investigated_flag
+  label_column: null
+  # If no true labels are available, use weak-label heuristics
+  use_weak_labels: true
+
 # Network Analysis Settings
 network_analysis:
   min_participation_threshold: 3  # Minimum bids to be in network

@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple, Optional
 from sklearn.ensemble import IsolationForest
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import f1_score
 from scipy import stats
 from .utils import Logger, compute_z_score, detect_outliers_iqr
 
@@ -31,13 +32,141 @@ class AnomalyDetectionEngine:
         self.lof = None
         self.feature_columns = []
         self.anomaly_scores = {}
+        self.tuning_report = {}
     
-    def detect_anomalies(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _resolve_labels(self, df: pd.DataFrame, label_column: Optional[str] = None,
+                        use_weak_labels: bool = False) -> Optional[np.ndarray]:
+        """Resolve supervision labels for contamination tuning."""
+        if label_column and label_column in df.columns:
+            labels = pd.to_numeric(df[label_column], errors='coerce')
+            valid_mask = labels.notna()
+            if valid_mask.sum() == 0:
+                return None
+            labels = labels.fillna(0).astype(int).clip(0, 1)
+            if labels.nunique() < 2:
+                return None
+            return labels.values
+        
+        if use_weak_labels:
+            weak_labels = self._build_weak_labels(df)
+            if weak_labels is not None and len(np.unique(weak_labels)) >= 2:
+                return weak_labels
+        
+        return None
+    
+    def _build_weak_labels(self, df: pd.DataFrame) -> Optional[np.ndarray]:
+        """Build weak labels from high-risk heuristic rules."""
+        required_cols = ['bid_deviation_zscore', 'complementary_bid_score', 'bidder_set_repetition']
+        if not any(col in df.columns for col in required_cols):
+            return None
+        
+        deviation = (
+            np.abs(df['bid_deviation_zscore'].fillna(0)) >= 2.5
+            if 'bid_deviation_zscore' in df.columns else pd.Series(False, index=df.index)
+        )
+        complementary = (
+            df['complementary_bid_score'].fillna(0) >= 0.8
+            if 'complementary_bid_score' in df.columns else pd.Series(False, index=df.index)
+        )
+        repetition = (
+            df['bidder_set_repetition'].fillna(0) >= 0.8
+            if 'bidder_set_repetition' in df.columns else pd.Series(False, index=df.index)
+        )
+        temporal = (
+            df['temporal_anomaly_score'].fillna(0) >= 0.8
+            if 'temporal_anomaly_score' in df.columns else pd.Series(False, index=df.index)
+        )
+        
+        weak_labels = (deviation | complementary | repetition | temporal).astype(int)
+        positives = int(weak_labels.sum())
+        if positives == 0 or positives == len(weak_labels):
+            return None
+        
+        return weak_labels.values
+    
+    def _compute_composite_scores(self, df: pd.DataFrame, contamination: float) -> pd.Series:
+        """Compute composite anomaly score for a given contamination level."""
+        original_contamination = self.contamination
+        self.contamination = contamination
+        try:
+            X = df[self.feature_columns].fillna(0).values
+            iso_scores = self._isolation_forest_detection(X)
+            lof_scores = self._lof_detection(X)
+            stat_scores = self._statistical_detection(df)
+            composite = (
+                iso_scores * 0.4 +
+                lof_scores * 0.35 +
+                stat_scores * 0.25
+            )
+            return pd.Series(composite, index=df.index)
+        finally:
+            self.contamination = original_contamination
+    
+    def tune_contamination(self, df: pd.DataFrame, labels: np.ndarray,
+                           candidates: Optional[List[float]] = None) -> float:
+        """
+        Tune contamination using labeled or weak-labeled records.
+        
+        Args:
+            df: Feature-engineered DataFrame
+            labels: Binary target labels (1=suspicious, 0=normal)
+            candidates: List of contamination candidates
+        
+        Returns:
+            Best contamination value
+        """
+        if candidates is None:
+            candidates = [0.01, 0.03, 0.05, 0.08, 0.1, 0.12, 0.15, 0.2]
+        
+        if labels is None or len(np.unique(labels)) < 2:
+            self.tuning_report = {
+                'status': 'skipped',
+                'reason': 'labels unavailable or single class'
+            }
+            return self.contamination
+        
+        best_contamination = self.contamination
+        best_f1 = -1.0
+        candidate_metrics = []
+        
+        for candidate in candidates:
+            candidate = float(np.clip(candidate, 0.001, 0.5))
+            scores = self._compute_composite_scores(df, candidate)
+            preds = (scores >= (1 - candidate)).astype(int).values
+            f1 = float(f1_score(labels, preds, zero_division=0))
+            candidate_metrics.append({
+                'contamination': candidate,
+                'f1': round(f1, 4),
+                'predicted_positive_rate': round(float(preds.mean()), 4)
+            })
+            if f1 > best_f1:
+                best_f1 = f1
+                best_contamination = candidate
+        
+        self.contamination = best_contamination
+        self.tuning_report = {
+            'status': 'completed',
+            'best_contamination': best_contamination,
+            'best_f1': round(best_f1, 4),
+            'candidate_metrics': candidate_metrics
+        }
+        logger.info(f"Auto-tuned contamination to {best_contamination:.3f} (best F1={best_f1:.4f})")
+        
+        return best_contamination
+    
+    def detect_anomalies(self, df: pd.DataFrame, auto_tune: bool = False,
+                         label_column: Optional[str] = None,
+                         use_weak_labels: bool = False,
+                         contamination_candidates: Optional[List[float]] = None) -> pd.DataFrame:
         """
         Detect anomalies using multiple methods.
         
         Args:
             df: DataFrame with engineered features
+            auto_tune: Whether to tune contamination from supervision labels
+            label_column: Optional true label column name (0/1)
+            use_weak_labels: Whether to auto-generate weak labels if true labels absent
+            contamination_candidates: Candidate contamination values for tuning
         
         Returns:
             DataFrame with anomaly scores
@@ -56,6 +185,18 @@ class AnomalyDetectionEngine:
         
         # Prepare data
         X = df[self.feature_columns].fillna(0).values
+        
+        if auto_tune:
+            labels = self._resolve_labels(
+                df=df,
+                label_column=label_column,
+                use_weak_labels=use_weak_labels
+            )
+            self.tune_contamination(
+                df=df,
+                labels=labels,
+                candidates=contamination_candidates
+            )
         
         # Detect anomalies using multiple methods
         logger.info("Running Isolation Forest...")

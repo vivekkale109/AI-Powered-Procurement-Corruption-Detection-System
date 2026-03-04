@@ -115,9 +115,26 @@ class ProcurementAnalysisPipeline:
     
     def _step_anomaly_detection(self):
         """Step 3: Anomaly detection."""
+        anomaly_cfg = self.config.get('anomaly_detection', {})
+        reliability_cfg = self.config.get('model_reliability', {})
+        contamination = (
+            anomaly_cfg.get('isolation_forest', {}).get('contamination', 0.05)
+            if isinstance(anomaly_cfg, dict) else 0.05
+        )
+        label_column = reliability_cfg.get('label_column') if isinstance(reliability_cfg, dict) else None
+        use_weak_labels = reliability_cfg.get('use_weak_labels', True) if isinstance(reliability_cfg, dict) else True
+        tune_contamination = reliability_cfg.get('tune_contamination', False) if isinstance(reliability_cfg, dict) else False
+        
         # Run multiple algorithms
-        anomaly_engine = AnomalyDetectionEngine(contamination=0.05)
-        self.data = anomaly_engine.detect_anomalies(self.data)
+        anomaly_engine = AnomalyDetectionEngine(contamination=contamination)
+        self.data = anomaly_engine.detect_anomalies(
+            self.data,
+            auto_tune=tune_contamination,
+            label_column=label_column,
+            use_weak_labels=use_weak_labels,
+            contamination_candidates=reliability_cfg.get('contamination_candidates') if isinstance(reliability_cfg, dict) else None
+        )
+        self.results['anomaly_tuning'] = anomaly_engine.tuning_report
         
         # Additional detectors
         self.data = BidGapAnalyzer.analyze_bid_gaps(self.data)
@@ -126,6 +143,8 @@ class ProcurementAnalysisPipeline:
         num_anomalies = self.data['is_anomaly'].sum()
         logger.info(f"  • Detected {num_anomalies} anomalous tenders ({num_anomalies/len(self.data)*100:.1f}%)")
         logger.info(f"  • Anomaly detection algorithms: Isolation Forest, LOF, Statistical")
+        if self.results.get('anomaly_tuning'):
+            logger.info(f"  • Anomaly tuning: {self.results['anomaly_tuning']}")
     
     def _step_network_analysis(self):
         """Step 4: Network analysis."""
@@ -144,8 +163,17 @@ class ProcurementAnalysisPipeline:
     
     def _step_risk_scoring(self):
         """Step 5: Risk scoring."""
+        reliability_cfg = self.config.get('model_reliability', {})
         assessor = CorruptionRiskAssessor()
-        risk_results = assessor.assess_risk(self.data, self.results.get('network'))
+        risk_results = assessor.assess_risk(
+            self.data,
+            self.results.get('network'),
+            calibration_config={
+                'enabled': reliability_cfg.get('calibration_enabled', True) if isinstance(reliability_cfg, dict) else True,
+                'label_column': reliability_cfg.get('label_column') if isinstance(reliability_cfg, dict) else None,
+                'use_weak_labels': reliability_cfg.get('use_weak_labels', True) if isinstance(reliability_cfg, dict) else True
+            }
+        )
         
         self.results['risk'] = risk_results
         
@@ -166,6 +194,8 @@ class ProcurementAnalysisPipeline:
         logger.info(f"    - CRITICAL risk: {critical_contractors}")
         
         logger.info(f"  • Departments analyzed: {len(dept_scores)}")
+        if risk_results.get('calibration'):
+            logger.info(f"  • Calibration: {risk_results['calibration']}")
     
     def _save_results(self, output_dir: str):
         """Save analysis results."""
@@ -182,7 +212,9 @@ class ProcurementAnalysisPipeline:
             risk_data = {
                 'tender_scores': self.results['risk']['tender_scores'].to_dict(orient='records'),
                 'contractor_scores': self.results['risk']['contractor_scores'].to_dict(orient='records'),
-                'department_scores': self.results['risk']['department_scores'].to_dict(orient='records')
+                'department_scores': self.results['risk']['department_scores'].to_dict(orient='records'),
+                'calibration': self.results['risk'].get('calibration', {}),
+                'anomaly_tuning': self.results.get('anomaly_tuning', {})
             }
             with open(risk_path, 'w') as f:
                 json.dump(risk_data, f, indent=2, default=str)

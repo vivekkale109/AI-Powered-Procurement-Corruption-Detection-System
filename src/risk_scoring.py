@@ -8,6 +8,8 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
 import warnings
+from sklearn.isotonic import IsotonicRegression
+from sklearn.metrics import brier_score_loss
 warnings.filterwarnings('ignore')
 
 from .utils import Logger, load_risk_weights, calculate_herfindahl_index
@@ -406,8 +408,81 @@ class CorruptionRiskAssessor:
         self.tender_scorer = TenderRiskScorer(self.weights_config)
         self.contractor_scorer = ContractorRiskScorer(self.weights_config)
         self.dept_scorer = DepartmentRiskScorer(self.weights_config)
+        self.calibration_report = {}
     
-    def assess_risk(self, df: pd.DataFrame, network_analysis: Dict = None) -> Dict:
+    def _resolve_labels(self, df: pd.DataFrame, label_column: Optional[str],
+                        use_weak_labels: bool) -> Optional[np.ndarray]:
+        """Resolve calibration labels from true labels or weak labeling."""
+        if label_column and label_column in df.columns:
+            labels = pd.to_numeric(df[label_column], errors='coerce')
+            valid_mask = labels.notna()
+            if valid_mask.sum() == 0:
+                return None
+            labels = labels.fillna(0).astype(int).clip(0, 1)
+            if labels.nunique() < 2:
+                return None
+            return labels.values
+        
+        if not use_weak_labels:
+            return None
+        
+        if 'anomaly_score' in df.columns:
+            q = float(df['anomaly_score'].quantile(0.9))
+            weak_labels = (df['anomaly_score'].fillna(0) >= q).astype(int)
+            if weak_labels.nunique() >= 2:
+                return weak_labels.values
+        
+        return None
+    
+    def _calibrate_tender_scores(self, tender_scores: pd.DataFrame,
+                                 labels: Optional[np.ndarray]) -> pd.DataFrame:
+        """Calibrate final risk score into stable probability estimates."""
+        tender_scores = tender_scores.copy()
+        
+        if labels is None:
+            tender_scores['risk_probability'] = tender_scores['final_risk_score'].clip(0, 1)
+            self.calibration_report = {
+                'status': 'skipped',
+                'reason': 'labels unavailable'
+            }
+            return tender_scores
+        
+        y = np.asarray(labels).astype(int)
+        raw = tender_scores['final_risk_score'].fillna(0).values
+        
+        if len(np.unique(y)) < 2 or len(np.unique(raw)) < 2:
+            tender_scores['risk_probability'] = tender_scores['final_risk_score'].clip(0, 1)
+            self.calibration_report = {
+                'status': 'skipped',
+                'reason': 'insufficient class/score variance'
+            }
+            return tender_scores
+        
+        calibrator = IsotonicRegression(out_of_bounds='clip')
+        calibrator.fit(raw, y)
+        calibrated = calibrator.predict(raw)
+        tender_scores['risk_probability'] = np.clip(calibrated, 0, 1)
+        
+        try:
+            before_brier = float(brier_score_loss(y, np.clip(raw, 0, 1)))
+            after_brier = float(brier_score_loss(y, tender_scores['risk_probability'].values))
+        except Exception:
+            before_brier = None
+            after_brier = None
+        
+        self.calibration_report = {
+            'status': 'completed',
+            'method': 'isotonic_regression',
+            'label_positives': int(y.sum()),
+            'label_count': int(len(y)),
+            'brier_before': round(before_brier, 6) if before_brier is not None else None,
+            'brier_after': round(after_brier, 6) if after_brier is not None else None
+        }
+        
+        return tender_scores
+    
+    def assess_risk(self, df: pd.DataFrame, network_analysis: Dict = None,
+                    calibration_config: Optional[Dict] = None) -> Dict:
         """
         Perform comprehensive risk assessment.
         
@@ -424,6 +499,20 @@ class CorruptionRiskAssessor:
         logger.info("Scoring tenders...")
         tender_scores = self._score_all_tenders(df, network_analysis)
         
+        calibration_config = calibration_config or {}
+        if calibration_config.get('enabled', True):
+            labels = self._resolve_labels(
+                df=df,
+                label_column=calibration_config.get('label_column'),
+                use_weak_labels=calibration_config.get('use_weak_labels', True)
+            )
+            tender_scores = self._calibrate_tender_scores(tender_scores, labels)
+        else:
+            tender_scores['risk_probability'] = tender_scores['final_risk_score'].clip(0, 1)
+            self.calibration_report = {
+                'status': 'disabled'
+            }
+        
         # Score contractors
         logger.info("Scoring contractors...")
         contractor_scores = self.contractor_scorer.score_contractors(df, network_analysis)
@@ -437,7 +526,8 @@ class CorruptionRiskAssessor:
         return {
             'tender_scores': tender_scores,
             'contractor_scores': contractor_scores,
-            'department_scores': dept_scores
+            'department_scores': dept_scores,
+            'calibration': self.calibration_report
         }
     
     def _score_all_tenders(self, df: pd.DataFrame, network_analysis: Dict) -> pd.DataFrame:

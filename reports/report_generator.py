@@ -207,6 +207,9 @@ class ReportGenerator:
         
         tenders_html = self._dataframe_to_html(
             high_risk_tenders[['tender_id', 'final_risk_score', 'risk_category', 
+                               'risk_probability', 'price_anomaly', 'winner_concentration']]
+            if 'risk_probability' in high_risk_tenders.columns else
+            high_risk_tenders[['tender_id', 'final_risk_score', 'risk_category', 
                                'price_anomaly', 'winner_concentration']]
         )
         
@@ -366,6 +369,7 @@ class ReportGenerator:
         tender_cols = [
             'tender_id',
             'final_risk_score',
+            'risk_probability',
             'risk_category',
             'anomaly_score',
             'price_anomaly',

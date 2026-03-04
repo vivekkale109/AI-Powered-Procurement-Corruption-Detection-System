@@ -98,7 +98,11 @@ def analyze():
         "data": [list of tender records],
         "options": {
           "generate_report": true,
-          "contamination": 0.05
+          "contamination": 0.05,
+          "tune_contamination": false,
+          "label_column": "is_corrupt",
+          "use_weak_labels": true,
+          "calibration_enabled": true
         }
       }
     
@@ -136,7 +140,13 @@ def analyze():
         anomaly_engine = AnomalyDetectionEngine(
             contamination=options.get('contamination', 0.05)
         )
-        df = anomaly_engine.detect_anomalies(df)
+        df = anomaly_engine.detect_anomalies(
+            df,
+            auto_tune=options.get('tune_contamination', False),
+            label_column=options.get('label_column'),
+            use_weak_labels=options.get('use_weak_labels', True),
+            contamination_candidates=options.get('contamination_candidates')
+        )
         
         # Network analysis
         network_analyzer = NetworkAnalyzer()
@@ -144,7 +154,15 @@ def analyze():
         
         # Risk scoring
         assessor = CorruptionRiskAssessor()
-        risk_results = assessor.assess_risk(df, network_results)
+        risk_results = assessor.assess_risk(
+            df,
+            network_results,
+            calibration_config={
+                'enabled': options.get('calibration_enabled', True),
+                'label_column': options.get('label_column'),
+                'use_weak_labels': options.get('use_weak_labels', True)
+            }
+        )
         
         execution_time = time.time() - start_time
         
@@ -154,7 +172,9 @@ def analyze():
                 'tender_scores': risk_results['tender_scores'].to_dict(orient='records'),
                 'contractor_scores': risk_results['contractor_scores'].to_dict(orient='records'),
                 'department_scores': risk_results['department_scores'].to_dict(orient='records'),
-                'network_stats': network_results['network_stats']
+                'network_stats': network_results['network_stats'],
+                'calibration': risk_results.get('calibration', {}),
+                'anomaly_tuning': anomaly_engine.tuning_report
             },
             'validation_report': validation_report,
             'execution_time': execution_time
