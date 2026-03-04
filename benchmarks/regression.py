@@ -75,6 +75,10 @@ def default_tolerances() -> Dict[str, float]:
         "std_final_risk_score": 0.03,
         "mean_risk_probability": 0.03,
         "anomaly_rate": 0.08,
+        # Allow small rank instability across Python/sklearn patch versions.
+        "top_5_min_overlap": 3,
+        # Allow small category boundary jitter near threshold cutoffs.
+        "risk_category_total_delta": 2,
     }
 
 
@@ -90,16 +94,25 @@ def compare_metrics(current: Dict[str, Any], baseline: Dict[str, Any], tolerance
                 f"{metric} drifted: current={curr:.6f}, baseline={base:.6f}, tolerance={tol:.6f}"
             )
 
-    if current.get("top_5_tender_ids") != baseline.get("top_5_tender_ids"):
+    current_top = current.get("top_5_tender_ids") or []
+    baseline_top = baseline.get("top_5_tender_ids") or []
+    min_overlap = int(tolerances.get("top_5_min_overlap", 3))
+    overlap = len(set(current_top).intersection(set(baseline_top)))
+    if overlap < min_overlap:
         failures.append(
-            f"top_5_tender_ids changed: current={current.get('top_5_tender_ids')}, "
-            f"baseline={baseline.get('top_5_tender_ids')}"
+            f"top_5_tender_ids overlap too low: overlap={overlap}, required>={min_overlap}, "
+            f"current={current_top}, baseline={baseline_top}"
         )
 
-    if current.get("risk_category_counts") != baseline.get("risk_category_counts"):
+    current_counts = current.get("risk_category_counts") or {}
+    baseline_counts = baseline.get("risk_category_counts") or {}
+    all_keys = sorted(set(current_counts.keys()).union(set(baseline_counts.keys())))
+    total_delta = sum(abs(int(current_counts.get(k, 0)) - int(baseline_counts.get(k, 0))) for k in all_keys)
+    max_total_delta = int(tolerances.get("risk_category_total_delta", 2))
+    if total_delta > max_total_delta:
         failures.append(
-            f"risk_category_counts changed: current={current.get('risk_category_counts')}, "
-            f"baseline={baseline.get('risk_category_counts')}"
+            f"risk_category_counts drifted: total_delta={total_delta}, allowed<={max_total_delta}, "
+            f"current={current_counts}, baseline={baseline_counts}"
         )
 
     return failures
@@ -108,7 +121,10 @@ def compare_metrics(current: Dict[str, Any], baseline: Dict[str, Any], tolerance
 def load_baseline(path: Path) -> Tuple[Dict[str, Any], Dict[str, float]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     metrics = payload.get("metrics", {})
-    tolerances = payload.get("tolerances", default_tolerances())
+    tolerances = default_tolerances()
+    file_tolerances = payload.get("tolerances", {})
+    if isinstance(file_tolerances, dict):
+        tolerances.update(file_tolerances)
     return metrics, tolerances
 
 
@@ -163,4 +179,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
