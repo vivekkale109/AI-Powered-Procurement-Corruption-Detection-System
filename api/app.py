@@ -8,6 +8,7 @@ from __future__ import annotations
 from flask import Flask, request, jsonify, send_file, abort
 from flask_cors import CORS
 import sys
+import os
 import io
 import uuid
 import time
@@ -734,6 +735,24 @@ def health():
             "features": ["schema-models", "pagination", "rate-limiting", "async-jobs"],
         }
     )
+
+
+@app.route("/api/v1/ready", methods=["GET"])
+def ready():
+    """Readiness check endpoint for container orchestrators."""
+    checks = {
+        "config_loaded": isinstance(APP_CONFIG, dict) and bool(APP_CONFIG),
+        "reports_dir_exists": REPORTS_BASE_DIR.exists(),
+        "reports_dir_writable": REPORTS_BASE_DIR.exists() and os.access(REPORTS_BASE_DIR, os.W_OK),
+    }
+    ok = all(checks.values())
+    return jsonify(
+        {
+            "status": "ready" if ok else "not_ready",
+            "checks": checks,
+            "service": "procurement-corruption-detection",
+        }
+    ), (200 if ok else 503)
 
 
 @app.route("/api/v1/analyze", methods=["POST"])

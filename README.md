@@ -132,6 +132,42 @@ The system is designed for scalability:
 - **API Layer**: REST API for integration
 - **Async Processing**: Task queue for batch processing
 
+## Deployment Maturity
+
+- Container health checks:
+  - API readiness: `GET /api/v1/ready`
+  - API liveness: `GET /api/v1/health`
+  - Docker/Compose health probes are configured for `api`, `dashboard`, and `db`.
+- CI pipeline:
+  - GitHub Actions workflow at `.github/workflows/ci.yml`
+  - Runs lint (syntax/runtime checks), unittest suite, benchmark drift guardrail, and Docker build.
+- Reproducible environments:
+  - Pinned interpreter in `.python-version` (`3.11.9`)
+  - Pinned app dependencies in `requirements.txt`
+  - Pinned dev dependency set in `requirements-dev.txt`
+  - Repeatable local commands in `Makefile` (`setup`, `lint`, `test`, `benchmark-regression`).
+
+## Benchmark Regression Guardrail
+
+- Benchmark dataset: `data/benchmarks/tender_regression_dataset.csv`
+- Baseline: `benchmarks/risk_score_baseline.json`
+- Drift check command:
+
+```bash
+python -m benchmarks.regression \
+  --dataset data/benchmarks/tender_regression_dataset.csv \
+  --baseline benchmarks/risk_score_baseline.json
+```
+
+- Refresh baseline intentionally after approved model/config changes:
+
+```bash
+python -m benchmarks.regression \
+  --dataset data/benchmarks/tender_regression_dataset.csv \
+  --baseline benchmarks/risk_score_baseline.json \
+  --write-baseline
+```
+
 ## Governance Alignment
 
 The system is aligned with:

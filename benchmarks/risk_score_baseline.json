@@ -1,0 +1,30 @@
+{
+  "created_at": "2026-03-04T11:57:52.161468Z",
+  "dataset_path": "data/benchmarks/tender_regression_dataset.csv",
+  "metrics": {
+    "dataset_rows": 12,
+    "mean_final_risk_score": 0.414223,
+    "std_final_risk_score": 0.080518,
+    "mean_risk_probability": 0.166667,
+    "anomaly_rate": 0.0,
+    "top_5_tender_ids": [
+      "B0005",
+      "B0008",
+      "B0001",
+      "B0007",
+      "B0012"
+    ],
+    "risk_category_counts": {
+      "CRITICAL": 0,
+      "HIGH": 0,
+      "MEDIUM": 10,
+      "LOW": 2
+    }
+  },
+  "tolerances": {
+    "mean_final_risk_score": 0.03,
+    "std_final_risk_score": 0.03,
+    "mean_risk_probability": 0.03,
+    "anomaly_rate": 0.08
+  }
+}

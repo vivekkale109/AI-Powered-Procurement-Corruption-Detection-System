@@ -1,0 +1,13 @@
+tender_id,department,estimated_cost,participating_bidders,bid_amounts,winning_bidder,winning_bid,tender_date,location,is_corrupt
+B0001,Transport,100000,"Bidder A, Bidder B, Bidder C","99000, 101500, 99500",Bidder A,99000,2024-01-10,North,0
+B0002,Water,120000,"Bidder A, Bidder C, Bidder D","115000, 121000, 118500",Bidder D,118500,2024-01-20,South,0
+B0003,Energy,95000,"Bidder E, Bidder F, Bidder A","94000, 96000, 95500",Bidder E,94000,2024-02-02,East,1
+B0004,Transport,150000,"Bidder B, Bidder C, Bidder F","145500, 148000, 147000",Bidder B,145500,2024-02-18,North,0
+B0005,Water,180000,"Bidder A, Bidder D, Bidder G","172000, 169500, 181000",Bidder D,169500,2024-03-03,South,1
+B0006,Energy,210000,"Bidder E, Bidder F, Bidder H","207500, 205000, 214000",Bidder F,205000,2024-03-22,West,0
+B0007,Health,130000,"Bidder I, Bidder B, Bidder C","128500, 133000, 129000",Bidder I,128500,2024-04-09,Central,0
+B0008,Transport,160000,"Bidder A, Bidder B, Bidder I","152000, 158500, 159000",Bidder A,152000,2024-04-24,North,1
+B0009,Water,140000,"Bidder D, Bidder G, Bidder H","139000, 142500, 141000",Bidder D,139000,2024-05-11,South,0
+B0010,Energy,175000,"Bidder E, Bidder H, Bidder F","169500, 170000, 172500",Bidder E,169500,2024-05-27,West,1
+B0011,Health,115000,"Bidder I, Bidder C, Bidder B","113000, 116500, 114500",Bidder I,113000,2024-06-13,Central,0
+B0012,Transport,190000,"Bidder A, Bidder F, Bidder G","183000, 186500, 184500",Bidder A,183000,2024-06-29,North,0

@@ -1,30 +1,23 @@
-"""
-Docker configuration for cloud deployment.
-"""
-
-FROM python:3.9-slim
+FROM python:3.11.9-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application
 COPY . .
 
-# Expose port for dashboard
-EXPOSE 8501
+EXPOSE 5000 8501
 
-# Environment variables
-ENV PYTHONUNBUFFERED=1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:5000/api/v1/health || exit 1
 
-# Run command
-CMD ["streamlit", "run", "dashboard/app.py"]
+CMD ["python", "api/app.py"]
