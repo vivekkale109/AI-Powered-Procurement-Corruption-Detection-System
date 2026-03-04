@@ -58,6 +58,15 @@ def _generate_reports(risk_results, network_results, processed_df, output_dir: P
         network_path.write_text(network_html, encoding='utf-8')
         report_files['network_analysis_report'] = network_path.name
 
+    final_path = output_dir / 'final_report_all_analysis.html'
+    final_html = report_gen.generate_final_report(
+        risk_results=risk_results,
+        data=processed_df,
+        network_analysis=network_results
+    )
+    final_path.write_text(final_html, encoding='utf-8')
+    report_files['final_report_all_analysis'] = final_path.name
+
     return report_files
 
 

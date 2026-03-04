@@ -335,6 +335,77 @@ class ReportGenerator:
         )
         
         return html
+
+    def _extract_body_content(self, html: str) -> str:
+        """Extract body content from full HTML document for report composition."""
+        lower_html = html.lower()
+        body_start = lower_html.find("<body")
+        if body_start == -1:
+            return html
+
+        body_tag_end = lower_html.find(">", body_start)
+        body_end = lower_html.rfind("</body>")
+        if body_tag_end == -1 or body_end == -1:
+            return html
+
+        return html[body_tag_end + 1:body_end].strip()
+
+    def generate_final_report(self, risk_results: Dict, data: pd.DataFrame,
+                              network_analysis: Optional[Dict] = None) -> str:
+        """Generate one consolidated report containing all analysis sections."""
+        executive_html = self.generate_executive_summary(risk_results, data)
+        detailed_html = self.generate_detailed_analysis(risk_results)
+        compliance_html = ComplianceReporter.generate_cvc_compliance_report(risk_results)
+
+        network_section = "<p>Network analysis data not available.</p>"
+        if network_analysis:
+            network_html = self.generate_network_report(network_analysis)
+            network_section = self._extract_body_content(network_html)
+
+        final_html = """
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 20px; line-height: 1.5; }}
+                h1 {{ color: #003366; }}
+                h2 {{ color: #1f77b4; border-bottom: 2px solid #ddd; padding-bottom: 8px; margin-top: 30px; }}
+                .section {{ margin-bottom: 36px; }}
+            </style>
+        </head>
+        <body>
+            <h1>Final Procurement Risk Report</h1>
+            <p><strong>Generated:</strong> {report_date}</p>
+
+            <div class="section">
+                <h2>Executive Summary</h2>
+                {executive_section}
+            </div>
+
+            <div class="section">
+                <h2>Detailed Analysis</h2>
+                {detailed_section}
+            </div>
+
+            <div class="section">
+                <h2>Network Analysis</h2>
+                {network_section}
+            </div>
+
+            <div class="section">
+                <h2>Compliance Assessment</h2>
+                {compliance_section}
+            </div>
+        </body>
+        </html>
+        """
+
+        return final_html.format(
+            report_date=self.report_date,
+            executive_section=self._extract_body_content(executive_html),
+            detailed_section=self._extract_body_content(detailed_html),
+            network_section=network_section,
+            compliance_section=self._extract_body_content(compliance_html),
+        )
     
     def save_report(self, html_content: str, filepath: str):
         """Save report to HTML file."""

@@ -80,6 +80,14 @@ def build_reports(report_type, analysis_results, processed_data):
                 "<html><body><h2>No network analysis results available.</h2></body></html>".encode("utf-8")
             )
 
+    if report_type in ("Final Report", "All Reports"):
+        html = report_gen.generate_final_report(
+            risk_results=risk_results,
+            data=processed_data,
+            network_analysis=network_results
+        )
+        reports["final_report_all_analysis.html"] = html.encode("utf-8")
+
     return reports
 
 
@@ -536,7 +544,7 @@ def show_export_report():
     
     report_type = st.selectbox(
         "Select Report Type",
-        ["Executive Summary", "Detailed Analysis", "Risk Rankings", "Network Analysis", "All Reports"]
+        ["Final Report", "Executive Summary", "Detailed Analysis", "Risk Rankings", "Network Analysis", "All Reports"]
     )
     
     include_charts = st.checkbox("Include visualizations", value=True)
