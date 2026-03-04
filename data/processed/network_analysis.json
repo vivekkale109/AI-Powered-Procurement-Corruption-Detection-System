@@ -1,11 +1,11 @@
 {
   "network_stats": {
     "num_nodes": 30,
-    "num_edges": 447,
-    "density": 1.0275862068965518,
-    "avg_degree": 29.8,
-    "num_triangles": 4004,
-    "avg_clustering": 0.9953779723894666
+    "num_edges": 445,
+    "density": 1.0229885057471264,
+    "avg_degree": 29.666666666666668,
+    "num_triangles": 3948,
+    "avg_clustering": 0.990658638934501
   },
   "num_suspicious_clusters": 1,
   "num_rotation_patterns": 30

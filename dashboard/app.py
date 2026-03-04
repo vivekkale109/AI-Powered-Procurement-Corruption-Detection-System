@@ -13,6 +13,8 @@ import networkx as nx
 from datetime import datetime
 import os
 import sys
+import io
+import zipfile
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,6 +24,7 @@ from src.feature_engineering import FeatureEngineer
 from src.anomaly_detection import AnomalyDetectionEngine
 from src.network_analysis import NetworkAnalyzer
 from src.risk_scoring import CorruptionRiskAssessor
+from reports.report_generator import ReportGenerator, ComplianceReporter
 
 
 def load_data(uploaded_file=None):
@@ -45,6 +48,39 @@ def initialize_session_state():
         st.session_state.analysis_results = None
     if 'processed_data' not in st.session_state:
         st.session_state.processed_data = None
+    if 'generated_reports' not in st.session_state:
+        st.session_state.generated_reports = {}
+
+
+def build_reports(report_type, analysis_results, processed_data):
+    """Build selected report(s) and return mapping of filename to HTML bytes."""
+    report_gen = ReportGenerator()
+    risk_results = analysis_results['risk']
+    network_results = analysis_results.get('network')
+    reports = {}
+
+    if report_type in ("Executive Summary", "All Reports"):
+        html = report_gen.generate_executive_summary(risk_results, processed_data)
+        reports["executive_summary.html"] = html.encode("utf-8")
+
+    if report_type in ("Detailed Analysis", "All Reports"):
+        html = report_gen.generate_detailed_analysis(risk_results)
+        reports["detailed_analysis.html"] = html.encode("utf-8")
+
+    if report_type in ("Risk Rankings", "All Reports"):
+        html = ComplianceReporter.generate_cvc_compliance_report(risk_results)
+        reports["risk_rankings_compliance_report.html"] = html.encode("utf-8")
+
+    if report_type in ("Network Analysis", "All Reports"):
+        if network_results:
+            html = report_gen.generate_network_report(network_results)
+            reports["network_analysis_report.html"] = html.encode("utf-8")
+        else:
+            reports["network_analysis_report.html"] = (
+                "<html><body><h2>No network analysis results available.</h2></body></html>".encode("utf-8")
+            )
+
+    return reports
 
 
 def main():
@@ -507,15 +543,44 @@ def show_export_report():
     include_data = st.checkbox("Include detailed data tables", value=True)
     
     if st.button("Generate Report", use_container_width=True):
-        st.info("📊 Report generation feature coming soon")
-        st.markdown("""
-        The system will generate:
-        - **Executive Summary**: Key findings and recommendations
-        - **Risk Analysis**: Detailed tender and contractor risk assessments
-        - **Network Insights**: Collusion patterns and suspicious clusters
-        - **Department Review**: Procurement integrity by department
-        - **Governance Compliance**: Alignment with CVC framework
-        """)
+        reports = build_reports(
+            report_type=report_type,
+            analysis_results=st.session_state.analysis_results,
+            processed_data=st.session_state.processed_data
+        )
+        st.session_state.generated_reports = reports
+        st.success(f"Generated {len(reports)} report(s)")
+        if not include_charts or not include_data:
+            st.caption("Current export uses pre-defined HTML templates; chart/data toggles are reserved for upcoming template variants.")
+
+    if st.session_state.generated_reports:
+        st.subheader("Download Reports")
+
+        for filename, content in st.session_state.generated_reports.items():
+            st.download_button(
+                label=f"Download {filename}",
+                data=content,
+                file_name=filename,
+                mime="text/html",
+                use_container_width=True,
+                key=f"download_{filename}"
+            )
+
+        if len(st.session_state.generated_reports) > 1:
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for filename, content in st.session_state.generated_reports.items():
+                    zf.writestr(filename, content)
+            zip_buffer.seek(0)
+
+            st.download_button(
+                label="Download All Reports (ZIP)",
+                data=zip_buffer.getvalue(),
+                file_name="procurement_reports.zip",
+                mime="application/zip",
+                use_container_width=True,
+                key="download_all_reports_zip"
+            )
 
 
 if __name__ == "__main__":
