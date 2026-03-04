@@ -25,6 +25,128 @@ class DataValidator:
     def __init__(self):
         """Initialize validator."""
         self.validation_report = {}
+        self.validated_data = pd.DataFrame()
+    
+    def _is_blank(self, value) -> bool:
+        """Return True if a field value is blank-like."""
+        if pd.isna(value):
+            return True
+        if isinstance(value, str) and value.strip() == '':
+            return True
+        return False
+    
+    def _parse_bidders(self, bidders: Union[str, List, float]) -> List[str]:
+        """Parse participating bidders into normalized list."""
+        if pd.isna(bidders):
+            return []
+        if isinstance(bidders, list):
+            return [str(b).strip() for b in bidders if not self._is_blank(b)]
+        if isinstance(bidders, str):
+            return [b.strip() for b in bidders.split(',') if b.strip()]
+        return []
+    
+    def _parse_bid_amounts(self, bid_amounts: Union[str, List, float]) -> Optional[List[float]]:
+        """Parse bid amounts from list or comma-separated string."""
+        if pd.isna(bid_amounts):
+            return None
+        if isinstance(bid_amounts, list):
+            parsed = pd.to_numeric(pd.Series(bid_amounts), errors='coerce').tolist()
+        elif isinstance(bid_amounts, str):
+            parts = [p.strip() for p in bid_amounts.split(',') if p.strip()]
+            if not parts:
+                return None
+            parsed = pd.to_numeric(pd.Series(parts), errors='coerce').tolist()
+        else:
+            return None
+        
+        if any(pd.isna(v) for v in parsed):
+            return None
+        return [float(v) for v in parsed]
+    
+    def _validate_row(self, row: pd.Series, row_idx: int) -> Tuple[bool, List[str], Dict[str, any]]:
+        """Validate one row against required schema and range constraints."""
+        reasons = []
+        
+        # Required fields must exist and not be blank
+        for field in self.REQUIRED_FIELDS:
+            if field not in row.index or self._is_blank(row.get(field)):
+                reasons.append(f"{field} is missing or blank")
+        
+        if reasons:
+            return False, reasons, {}
+        
+        cleaned = {}
+        
+        # tender_id
+        tender_id = str(row['tender_id']).strip()
+        if not tender_id:
+            reasons.append("tender_id must be a non-empty string")
+        cleaned['tender_id'] = tender_id
+        
+        # department
+        department = str(row['department']).strip()
+        if not department:
+            reasons.append("department must be a non-empty string")
+        cleaned['department'] = department
+        
+        # estimated_cost numeric and in range
+        estimated_cost = pd.to_numeric([row['estimated_cost']], errors='coerce')[0]
+        if pd.isna(estimated_cost):
+            reasons.append("estimated_cost must be numeric")
+        else:
+            min_cost = 0
+            max_cost = 1_000_000_000_000
+            if estimated_cost <= min_cost:
+                reasons.append("estimated_cost must be > 0")
+            if estimated_cost > max_cost:
+                reasons.append(f"estimated_cost exceeds max allowed ({max_cost})")
+        cleaned['estimated_cost'] = float(estimated_cost) if not pd.isna(estimated_cost) else row['estimated_cost']
+        
+        # participating_bidders
+        bidders = self._parse_bidders(row['participating_bidders'])
+        if len(bidders) == 0:
+            reasons.append("participating_bidders must contain at least one bidder")
+        cleaned['participating_bidders'] = ', '.join(bidders)
+        
+        # bid_amounts numeric list and in range
+        bid_amounts = self._parse_bid_amounts(row['bid_amounts'])
+        if bid_amounts is None or len(bid_amounts) == 0:
+            reasons.append("bid_amounts must be a non-empty numeric list")
+        else:
+            if any(v <= 0 for v in bid_amounts):
+                reasons.append("bid_amounts values must be > 0")
+            if len(bidders) > 0 and len(bid_amounts) != len(bidders):
+                reasons.append("bid_amounts count must match participating_bidders count")
+        cleaned['bid_amounts'] = ', '.join([str(v) for v in bid_amounts]) if bid_amounts else row['bid_amounts']
+        
+        # winning_bidder
+        winning_bidder = str(row['winning_bidder']).strip()
+        if not winning_bidder:
+            reasons.append("winning_bidder must be a non-empty string")
+        elif len(bidders) > 0 and winning_bidder not in bidders:
+            reasons.append("winning_bidder is not present in participating_bidders")
+        cleaned['winning_bidder'] = winning_bidder
+        
+        # tender_date
+        parsed_date = pd.to_datetime(row['tender_date'], errors='coerce')
+        if pd.isna(parsed_date):
+            reasons.append("tender_date must be a valid date")
+        else:
+            min_date = pd.Timestamp('2000-01-01')
+            max_date = pd.Timestamp(datetime.now().date())
+            if parsed_date < min_date:
+                reasons.append(f"tender_date must be on/after {min_date.date()}")
+            if parsed_date > max_date:
+                reasons.append("tender_date cannot be in the future")
+        cleaned['tender_date'] = row['tender_date']
+        
+        # location
+        location = str(row['location']).strip()
+        if not location:
+            reasons.append("location must be a non-empty string")
+        cleaned['location'] = location
+        
+        return len(reasons) == 0, reasons, cleaned
     
     def validate(self, df: pd.DataFrame) -> Tuple[bool, Dict[str, any]]:
         """
@@ -40,7 +162,13 @@ class DataValidator:
             'total_records': len(df),
             'missing_fields': [],
             'data_quality_issues': [],
-            'warnings': []
+            'warnings': [],
+            'accepted_records': 0,
+            'rejected_records': 0,
+            'accepted_rate': 0.0,
+            'rejected_rate': 0.0,
+            'rejection_reasons_summary': {},
+            'rejected_rows': []
         }
         
         # Check required fields
@@ -48,32 +176,43 @@ class DataValidator:
         if missing_fields:
             report['missing_fields'] = missing_fields
             logger.warning(f"Missing required fields: {missing_fields}")
+            self.validation_report = report
+            self.validated_data = pd.DataFrame(columns=df.columns)
+            return False, report
         
-        # Data type validation
-        if 'tender_date' in df.columns:
-            try:
-                pd.to_datetime(df['tender_date'])
-            except:
-                report['data_quality_issues'].append("tender_date contains invalid dates")
-        
-        if 'estimated_cost' in df.columns:
-            non_numeric = df[~pd.to_numeric(df['estimated_cost'], errors='coerce').notna()]
-            if len(non_numeric) > 0:
-                report['warnings'].append(
-                    f"estimated_cost has {len(non_numeric)} non-numeric values"
-                )
-        
-        # Completeness check
-        missing_values = df.isnull().sum()
-        for col in self.REQUIRED_FIELDS:
-            if col in df.columns and missing_values[col] > 0:
-                percentage = (missing_values[col] / len(df)) * 100
-                if percentage > 5:
-                    report['warnings'].append(
-                        f"{col}: {percentage:.1f}% missing values"
-                    )
-        
-        is_valid = len(report['missing_fields']) == 0
+        accepted_indices = []
+        rejection_summary = {}
+        rejected_rows = []
+
+        for idx, row in df.iterrows():
+            is_row_valid, reasons, _ = self._validate_row(row, idx)
+            if is_row_valid:
+                accepted_indices.append(idx)
+            else:
+                for reason in reasons:
+                    rejection_summary[reason] = rejection_summary.get(reason, 0) + 1
+                rejected_rows.append({
+                    'row_index': int(idx) if isinstance(idx, (int, np.integer)) else str(idx),
+                    'tender_id': str(row.get('tender_id', '')),
+                    'reasons': reasons
+                })
+
+        report['accepted_records'] = len(accepted_indices)
+        report['rejected_records'] = len(rejected_rows)
+        if len(df) > 0:
+            report['accepted_rate'] = round((len(accepted_indices) / len(df)) * 100, 2)
+            report['rejected_rate'] = round((len(rejected_rows) / len(df)) * 100, 2)
+        report['rejection_reasons_summary'] = rejection_summary
+        report['rejected_rows'] = rejected_rows
+
+        if report['rejected_records'] > 0:
+            report['warnings'].append(
+                f"{report['rejected_records']} row(s) rejected by strict schema validation"
+            )
+
+        # Keep only valid rows for downstream pipeline
+        self.validated_data = df.loc[accepted_indices].copy()
+        is_valid = len(report['missing_fields']) == 0 and report['accepted_records'] > 0
         self.validation_report = report
         
         return is_valid, report
@@ -82,6 +221,8 @@ class DataValidator:
         """Print validation report."""
         print("\n=== DATA VALIDATION REPORT ===")
         print(f"Total Records: {self.validation_report['total_records']}")
+        print(f"Accepted Records: {self.validation_report.get('accepted_records', 0)}")
+        print(f"Rejected Records: {self.validation_report.get('rejected_records', 0)}")
         
         if self.validation_report['missing_fields']:
             print(f"Missing Fields: {self.validation_report['missing_fields']}")
@@ -95,6 +236,11 @@ class DataValidator:
             print("Warnings:")
             for warning in self.validation_report['warnings']:
                 print(f"  - {warning}")
+        
+        if self.validation_report.get('rejection_reasons_summary'):
+            print("Rejection Reasons Summary:")
+            for reason, count in self.validation_report['rejection_reasons_summary'].items():
+                print(f"  - {reason}: {count}")
 
 
 class TenderDataLoader:
@@ -110,6 +256,7 @@ class TenderDataLoader:
         self.source = source
         self.raw_data = None
         self.validator = DataValidator()
+        self.validated_data = None
     
     def load(self) -> pd.DataFrame:
         """
@@ -155,6 +302,7 @@ class TenderDataLoader:
             self.load()
         
         is_valid, report = self.validator.validate(self.raw_data)
+        self.validated_data = self.validator.validated_data
         self.validator.print_report()
         
         return is_valid
@@ -164,6 +312,18 @@ class TenderDataLoader:
         if self.raw_data is None:
             self.load()
         return self.raw_data
+    
+    def get_validated_data(self) -> pd.DataFrame:
+        """Get strict-schema validated data."""
+        if self.validated_data is None:
+            if self.raw_data is None:
+                self.load()
+            self.validate()
+        return self.validated_data
+    
+    def get_validation_report(self) -> Dict[str, any]:
+        """Get validation report with row-level rejection reasons."""
+        return self.validator.validation_report
 
 
 class DataCleaner:
@@ -257,6 +417,7 @@ class DataIngestionPipeline:
         self.loader = TenderDataLoader(source)
         self.cleaner = DataCleaner()
         self.data = None
+        self.validation_report = {}
     
     def execute(self) -> pd.DataFrame:
         """
@@ -272,8 +433,16 @@ class DataIngestionPipeline:
         
         # Validate
         is_valid = self.loader.validate()
+        self.validation_report = self.loader.get_validation_report()
         if not is_valid:
-            logger.warning("Data validation failed, proceeding with caution")
+            raise ValueError(
+                "Strict schema validation failed. "
+                f"Missing fields: {self.validation_report.get('missing_fields', [])}, "
+                f"accepted_records: {self.validation_report.get('accepted_records', 0)}"
+            )
+        
+        # Move forward with only schema-valid rows
+        self.data = self.loader.get_validated_data()
         
         # Clean
         self.data = self.cleaner.clean(self.data, self.config)
@@ -290,3 +459,7 @@ class DataIngestionPipeline:
         if self.data is None:
             return self.execute()
         return self.data
+    
+    def get_validation_report(self) -> Dict[str, any]:
+        """Get strict schema validation report."""
+        return self.validation_report

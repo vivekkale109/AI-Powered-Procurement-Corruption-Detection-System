@@ -211,16 +211,26 @@ def show_upload_analyze():
         """)
     
     if uploaded_file is not None:
+        pipeline = None
         try:
             # Streamlit uploader returns an UploadedFile object.
             # Convert it to DataFrame before passing to the ingestion pipeline.
             raw_df = pd.read_csv(uploaded_file)
             pipeline = DataIngestionPipeline(raw_df)
             df = pipeline.execute()
+            validation_report = pipeline.get_validation_report()
             
             st.session_state.processed_data = df
             
             st.success("✓ Data loaded and preprocessed")
+            st.info(
+                f"Schema validation: accepted {validation_report.get('accepted_records', 0)} / "
+                f"{validation_report.get('total_records', 0)} rows; rejected {validation_report.get('rejected_records', 0)}"
+            )
+            if validation_report.get('rejected_rows'):
+                with st.expander("View rejected rows and reasons"):
+                    rejected_rows_df = pd.DataFrame(validation_report['rejected_rows'])
+                    st.dataframe(rejected_rows_df, use_container_width=True)
             
             # Display data summary
             st.subheader("Data Summary")
@@ -273,6 +283,14 @@ def show_upload_analyze():
                         import traceback
                         st.error(traceback.format_exc())
         
+        except ValueError as e:
+            st.error(f"Schema validation failed: {str(e)}")
+            try:
+                validation_report = pipeline.get_validation_report()
+                if validation_report:
+                    st.json(validation_report)
+            except Exception:
+                pass
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
 

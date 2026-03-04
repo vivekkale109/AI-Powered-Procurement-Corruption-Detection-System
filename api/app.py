@@ -112,6 +112,7 @@ def analyze():
     try:
         import time
         start_time = time.time()
+        pipeline = None
         
         data = request.json.get('data', [])
         options = request.json.get('options', {})
@@ -125,6 +126,7 @@ def analyze():
         # Run analysis pipeline
         pipeline = DataIngestionPipeline(data)
         df = pipeline.execute()
+        validation_report = pipeline.get_validation_report()
         
         # Feature engineering
         engineer = FeatureEngineer()
@@ -154,6 +156,7 @@ def analyze():
                 'department_scores': risk_results['department_scores'].to_dict(orient='records'),
                 'network_stats': network_results['network_stats']
             },
+            'validation_report': validation_report,
             'execution_time': execution_time
         }
 
@@ -174,6 +177,18 @@ def analyze():
             }
 
         return jsonify(response_payload)
+    except ValueError as e:
+        validation_report = {}
+        try:
+            if pipeline is not None:
+                validation_report = pipeline.get_validation_report()
+        except Exception:
+            validation_report = {}
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'validation_report': validation_report
+        }), 400
     
     except Exception as e:
         logger.error(f"Analysis error: {str(e)}")
