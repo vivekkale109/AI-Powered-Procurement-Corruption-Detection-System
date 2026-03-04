@@ -167,3 +167,27 @@ logging:
   output_file: "logs/system.log"
   max_file_size_mb: 100
   backup_count: 5
+
+# Security + Governance
+security:
+  report_auth_required: true
+  # For production, set via env/secret manager and rotate periodically.
+  report_api_keys: ["dev-report-api-key"]
+  download_signing_secret: "dev-download-signing-secret"
+  signed_url_ttl_seconds: 900
+
+retention:
+  enabled: true
+  report_retention_days: 30
+  cleanup_interval_seconds: 600
+
+pii_scrubbing:
+  enabled: true
+  replacement: "[REDACTED]"
+  patterns:
+    email: "([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})"
+    phone: "((?=(?:\\D*\\d){10,})\\+?\\d[\\d\\-\\s]{8,}\\d)"
+    aadhaar_like: "\\b\\d{4}\\s?\\d{4}\\s?\\d{4}\\b"
+    pan_like: "\\b[A-Z]{5}[0-9]{4}[A-Z]\\b"
+    ssn_like: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+    bank_account_like: "\\b\\d{9,18}\\b"

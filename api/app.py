@@ -14,10 +14,14 @@ import time
 import math
 import threading
 import json
+import re
+import shutil
+import hmac
+import hashlib
 import traceback
 from pathlib import Path
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, TypedDict
 
 # Add src to path
@@ -40,6 +44,36 @@ APP_CONFIG = ConfigManager().config or {}
 SYSTEM_CONFIG = APP_CONFIG.get("system", {}) if isinstance(APP_CONFIG, dict) else {}
 REPORTS_BASE_DIR = PROJECT_ROOT / "data" / "processed" / "reports"
 REPORTS_BASE_DIR.mkdir(parents=True, exist_ok=True)
+SECURITY_CONFIG = APP_CONFIG.get("security", {}) if isinstance(APP_CONFIG, dict) else {}
+RETENTION_CONFIG = APP_CONFIG.get("retention", {}) if isinstance(APP_CONFIG, dict) else {}
+PII_CONFIG = APP_CONFIG.get("pii_scrubbing", {}) if isinstance(APP_CONFIG, dict) else {}
+
+REPORT_AUTH_REQUIRED = bool(SECURITY_CONFIG.get("report_auth_required", True))
+REPORT_API_KEYS = SECURITY_CONFIG.get("report_api_keys", ["dev-report-api-key"])
+if not isinstance(REPORT_API_KEYS, list):
+    REPORT_API_KEYS = ["dev-report-api-key"]
+REPORT_SIGNING_SECRET = str(SECURITY_CONFIG.get("download_signing_secret", "dev-download-signing-secret"))
+SIGNED_URL_TTL_SEC = int(SECURITY_CONFIG.get("signed_url_ttl_seconds", 900))
+
+RETENTION_ENABLED = bool(RETENTION_CONFIG.get("enabled", True))
+REPORT_RETENTION_DAYS = int(RETENTION_CONFIG.get("report_retention_days", 30))
+RETENTION_CLEANUP_INTERVAL_SEC = int(RETENTION_CONFIG.get("cleanup_interval_seconds", 600))
+
+PII_SCRUB_ENABLED = bool(PII_CONFIG.get("enabled", True))
+PII_REPLACEMENT = str(PII_CONFIG.get("replacement", "[REDACTED]"))
+PII_PATTERNS = PII_CONFIG.get(
+    "patterns",
+    {
+        "email": r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})",
+        "phone": r"((?=(?:\D*\d){10,})\+?\d[\d\-\s]{8,}\d)",
+        "aadhaar_like": r"\b\d{4}\s?\d{4}\s?\d{4}\b",
+        "pan_like": r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
+        "ssn_like": r"\b\d{3}-\d{2}-\d{4}\b",
+        "bank_account_like": r"\b\d{9,18}\b",
+    },
+)
+if not isinstance(PII_PATTERNS, dict):
+    PII_PATTERNS = {}
 
 
 class AnalyzeOptionsModel(TypedDict, total=False):
@@ -73,6 +107,13 @@ JOBS: Dict[str, Dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
 RUN_METRICS: deque = deque(maxlen=5000)
 METRICS_LOCK = threading.Lock()
+RETENTION_LOCK = threading.Lock()
+LAST_RETENTION_RUN_TS = 0.0
+PII_REGEX: Dict[str, re.Pattern] = {
+    name: re.compile(pattern, flags=re.IGNORECASE)
+    for name, pattern in PII_PATTERNS.items()
+    if isinstance(pattern, str) and pattern
+}
 
 
 def _now_iso() -> str:
@@ -89,6 +130,169 @@ def _error_response(message: str, code: int = 400, details: Optional[Dict[str, A
         },
     }
     return jsonify(payload), code
+
+
+def _parse_iso8601(ts: str) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _extract_api_key() -> str:
+    direct = request.headers.get("X-API-Key", "").strip()
+    if direct:
+        return direct
+    auth = request.headers.get("Authorization", "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return ""
+
+
+def _has_valid_api_key() -> bool:
+    if not REPORT_AUTH_REQUIRED:
+        return True
+    key = _extract_api_key()
+    if not key:
+        return False
+    return any(hmac.compare_digest(key, str(allowed)) for allowed in REPORT_API_KEYS)
+
+
+def _make_download_signature(run_id: str, report_name: str, expires_at: int) -> str:
+    payload = f"{run_id}:{report_name}:{expires_at}"
+    return hmac.new(
+        REPORT_SIGNING_SECRET.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _build_signed_download_url(run_id: str, report_name: str, expires_in_sec: Optional[int] = None) -> str:
+    ttl = expires_in_sec if expires_in_sec is not None else SIGNED_URL_TTL_SEC
+    expires_at = int(time.time()) + max(1, int(ttl))
+    sig = _make_download_signature(run_id, report_name, expires_at)
+    return f"/api/v1/reports/{run_id}/download/{report_name}?exp={expires_at}&sig={sig}"
+
+
+def _has_valid_signed_download(run_id: str, report_name: str) -> bool:
+    exp = request.args.get("exp", "")
+    sig = request.args.get("sig", "")
+    if not exp or not sig:
+        return False
+    try:
+        exp_int = int(exp)
+    except ValueError:
+        return False
+    if exp_int < int(time.time()):
+        return False
+    expected = _make_download_signature(run_id, report_name, exp_int)
+    return hmac.compare_digest(expected, sig)
+
+
+def _enforce_report_list_auth():
+    if not _has_valid_api_key():
+        abort(401, description="Unauthorized. Provide valid API key for report endpoints.")
+
+
+def _enforce_report_download_auth(run_id: str, report_name: str):
+    if _has_valid_api_key():
+        return
+    if _has_valid_signed_download(run_id, report_name):
+        return
+    abort(401, description="Unauthorized. Provide API key or valid signed URL.")
+
+
+def _run_retention_cleanup():
+    if not RETENTION_ENABLED:
+        return
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=max(1, REPORT_RETENTION_DAYS))
+    removed_runs = 0
+
+    for entry in REPORTS_BASE_DIR.iterdir():
+        if not entry.is_dir():
+            continue
+        modified = datetime.fromtimestamp(entry.stat().st_mtime, tz=timezone.utc)
+        if modified < cutoff:
+            shutil.rmtree(entry, ignore_errors=True)
+            removed_runs += 1
+
+    jobs_removed = 0
+    jobs_cutoff = now - timedelta(days=max(1, REPORT_RETENTION_DAYS))
+    with JOBS_LOCK:
+        for job_id in list(JOBS.keys()):
+            job = JOBS[job_id]
+            created = _parse_iso8601(job.get("created_at", ""))
+            if not created:
+                continue
+            if created < jobs_cutoff and job.get("status") in {"completed", "failed"}:
+                del JOBS[job_id]
+                jobs_removed += 1
+
+    _log_event(
+        "retention_cleanup_completed",
+        removed_report_runs=removed_runs,
+        removed_jobs=jobs_removed,
+        retention_days=REPORT_RETENTION_DAYS,
+    )
+
+
+def _maybe_run_retention_cleanup():
+    global LAST_RETENTION_RUN_TS
+    if not RETENTION_ENABLED:
+        return
+    now_ts = time.time()
+    with RETENTION_LOCK:
+        if now_ts - LAST_RETENTION_RUN_TS < max(1, RETENTION_CLEANUP_INTERVAL_SEC):
+            return
+        LAST_RETENTION_RUN_TS = now_ts
+    _run_retention_cleanup()
+
+
+def _scrub_pii_from_records(rows: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if not PII_SCRUB_ENABLED or not PII_REGEX:
+        return rows, {
+            "enabled": bool(PII_SCRUB_ENABLED),
+            "rows_scanned": len(rows),
+            "rows_modified": 0,
+            "total_replacements": 0,
+            "pattern_hits": {},
+        }
+
+    scrubbed_rows: List[Dict[str, Any]] = []
+    rows_modified = 0
+    total_replacements = 0
+    pattern_hits = {name: 0 for name in PII_REGEX}
+
+    for row in rows:
+        row_modified = False
+        updated = dict(row)
+        for key, value in list(updated.items()):
+            if not isinstance(value, str):
+                continue
+            original = value
+            for name, pattern in PII_REGEX.items():
+                value, hits = pattern.subn(PII_REPLACEMENT, value)
+                if hits > 0:
+                    row_modified = True
+                    total_replacements += hits
+                    pattern_hits[name] += hits
+            if value != original:
+                updated[key] = value
+        if row_modified:
+            rows_modified += 1
+        scrubbed_rows.append(updated)
+
+    return scrubbed_rows, {
+        "enabled": True,
+        "rows_scanned": len(rows),
+        "rows_modified": rows_modified,
+        "total_replacements": total_replacements,
+        "pattern_hits": pattern_hits,
+    }
 
 
 def _log_event(event: str, level: str = "info", **kwargs):
@@ -153,6 +357,7 @@ def apply_rate_limiting():
         return None
     if request.path == "/api/v1/health":
         return None
+    _maybe_run_retention_cleanup()
 
     limit = GENERAL_LIMIT_PER_MIN
     if request.path == "/api/v1/analyze":
@@ -327,6 +532,17 @@ def _execute_analysis(data: List[Dict[str, Any]], options: AnalyzeOptionsModel,
     step_timings: Dict[str, float] = {}
     _log_event("analysis_started", run_id=run_id, source=source, input_rows=len(data))
 
+    scrubbed_data, pii_report = _scrub_pii_from_records(data)
+    if pii_report.get("total_replacements", 0) > 0:
+        _log_event(
+            "pii_scrubbing_applied",
+            run_id=run_id,
+            source=source,
+            rows_modified=pii_report.get("rows_modified", 0),
+            total_replacements=pii_report.get("total_replacements", 0),
+            pattern_hits=pii_report.get("pattern_hits", {}),
+        )
+
     def run_step(step_name: str, fn):
         step_start = time.time()
         out = fn()
@@ -335,7 +551,7 @@ def _execute_analysis(data: List[Dict[str, Any]], options: AnalyzeOptionsModel,
         _log_event("analysis_step_completed", run_id=run_id, source=source, step=step_name, duration_sec=duration)
         return out
 
-    pipeline = DataIngestionPipeline(data)
+    pipeline = DataIngestionPipeline(scrubbed_data)
     df = run_step("data_ingestion", lambda: pipeline.execute())
     validation_report = pipeline.get_validation_report()
 
@@ -391,6 +607,7 @@ def _execute_analysis(data: List[Dict[str, Any]], options: AnalyzeOptionsModel,
         "calibration": risk_results.get("calibration", {}),
         "anomaly_tuning": anomaly_engine.tuning_report,
         "validation_report": validation_report,
+        "pii_scrubbing": pii_report,
         "execution_time": execution_time,
         "anomaly_rate": anomaly_rate,
         "step_timings": step_timings,
@@ -559,6 +776,9 @@ def analyze():
                 "step_timings": full_result.get("step_timings", {}),
                 "anomaly_rate": full_result.get("anomaly_rate", 0.0),
             },
+            "governance": {
+                "pii_scrubbing": full_result.get("pii_scrubbing", {}),
+            },
         }
 
         if req_model["options"]["generate_report"]:
@@ -685,6 +905,9 @@ def analyze_job_result(job_id):
             "step_timings": full_result.get("step_timings", {}),
             "anomaly_rate": full_result.get("anomaly_rate", 0.0),
         },
+        "governance": {
+            "pii_scrubbing": full_result.get("pii_scrubbing", {}),
+        },
     }
     if job.get("reports"):
         response_payload["reports"] = job["reports"]
@@ -716,18 +939,24 @@ def get_contractor_risk(contractor):
 @app.route("/api/v1/reports/<run_id>", methods=["GET"])
 def list_reports(run_id):
     """List generated reports for a specific analysis run."""
+    _enforce_report_list_auth()
     run_dir = _get_run_dir(run_id)
     files = sorted([
         p.name for p in run_dir.iterdir()
         if p.is_file() and p.suffix.lower() in (".html", ".csv")
     ])
+    signed_urls = [_build_signed_download_url(run_id, name) for name in files]
+    signed_download_all = _build_signed_download_url(run_id, "all")
     return jsonify(
         {
             "status": "success",
             "run_id": run_id,
             "files": files,
             "download_urls": [f"/api/v1/reports/{run_id}/download/{name}" for name in files],
+            "signed_download_urls": signed_urls,
             "download_all_url": f"/api/v1/reports/{run_id}/download/all",
+            "signed_download_all_url": signed_download_all,
+            "signed_url_ttl_seconds": SIGNED_URL_TTL_SEC,
         }
     )
 
@@ -735,6 +964,7 @@ def list_reports(run_id):
 @app.route("/api/v1/reports/<run_id>/download/<report_name>", methods=["GET"])
 def download_report(run_id, report_name):
     """Download a specific generated report."""
+    _enforce_report_download_auth(run_id, report_name)
     run_dir = _get_run_dir(run_id)
     file_path = (run_dir / report_name).resolve()
 
@@ -748,6 +978,7 @@ def download_report(run_id, report_name):
 @app.route("/api/v1/reports/<run_id>/download/all", methods=["GET"])
 def download_all_reports(run_id):
     """Download all generated reports for a run as ZIP."""
+    _enforce_report_download_auth(run_id, "all")
     run_dir = _get_run_dir(run_id)
     report_files = sorted([
         p for p in run_dir.iterdir()

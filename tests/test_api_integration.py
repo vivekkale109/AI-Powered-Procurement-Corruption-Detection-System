@@ -14,6 +14,9 @@ class TestApiIntegration(unittest.TestCase):
         self.api_module = importlib.import_module("api.app")
         self.api_module.REPORTS_BASE_DIR = Path(self.tmp_dir.name) / "reports"
         self.api_module.REPORTS_BASE_DIR.mkdir(parents=True, exist_ok=True)
+        self.api_module.REPORT_API_KEYS = ["test-report-key"]
+        self.api_module.REPORT_AUTH_REQUIRED = True
+        self.headers = {"X-API-Key": "test-report-key"}
         self.client = self.api_module.app.test_client()
         self.api_module.app.testing = True
 
@@ -38,31 +41,44 @@ class TestApiIntegration(unittest.TestCase):
         self.assertEqual(analyze_json["status"], "success")
         self.assertIn("validation_report", analyze_json)
         self.assertIn("reports", analyze_json)
+        self.assertIn("governance", analyze_json)
+        self.assertIn("pii_scrubbing", analyze_json["governance"])
         self.assertIn("run_id", analyze_json["reports"])
         self.assertIn("files", analyze_json["reports"])
 
         list_url = analyze_json["reports"]["list_url"]
-        list_resp = self.client.get(list_url)
+        list_resp = self.client.get(list_url, headers=self.headers)
         self.assertEqual(list_resp.status_code, 200)
         list_json = list_resp.get_json()
         self.assertIn("final_report_all_analysis.html", list_json["files"])
         self.assertIn("all_tender_scores.csv", list_json["files"])
+        self.assertIn("signed_download_urls", list_json)
+        self.assertIn("signed_download_all_url", list_json)
         self.assertGreaterEqual(len(list_json["files"]), 1)
 
+        unauth_download = self.client.get(f"/api/v1/reports/{list_json['run_id']}/download/{list_json['files'][0]}")
+        self.assertEqual(unauth_download.status_code, 401)
+
         html_file = next(name for name in list_json["files"] if name.endswith(".html"))
-        one_download = self.client.get(f"/api/v1/reports/{list_json['run_id']}/download/{html_file}")
+        one_download = self.client.get(
+            f"/api/v1/reports/{list_json['run_id']}/download/{html_file}",
+            headers=self.headers,
+        )
         self.assertEqual(one_download.status_code, 200)
         self.assertGreater(len(one_download.data), 0)
         self.assertIn("text/html", one_download.content_type)
         one_download.close()
 
-        csv_download = self.client.get(f"/api/v1/reports/{list_json['run_id']}/download/all_tender_scores.csv")
+        signed_csv_url = next(
+            url for url in list_json["signed_download_urls"] if "all_tender_scores.csv" in url
+        )
+        csv_download = self.client.get(signed_csv_url)
         self.assertEqual(csv_download.status_code, 200)
         self.assertGreater(len(csv_download.data), 0)
         self.assertIn("text/csv", csv_download.content_type)
         csv_download.close()
 
-        all_download = self.client.get(f"/api/v1/reports/{list_json['run_id']}/download/all")
+        all_download = self.client.get(list_json["signed_download_all_url"])
         self.assertEqual(all_download.status_code, 200)
         self.assertGreater(len(all_download.data), 0)
         self.assertIn("zip", all_download.content_type)
