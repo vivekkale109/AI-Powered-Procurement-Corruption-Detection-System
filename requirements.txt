@@ -16,3 +16,6 @@ Levenshtein==0.22.0
 rapidfuzz==3.6.0
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
+PyYAML==6.0.2
+Jinja2==3.1.4
+openpyxl==3.1.5
