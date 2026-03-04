@@ -206,10 +206,14 @@ class ReportGenerator:
         ].nlargest(20, 'final_risk_score')
         
         tenders_html = self._dataframe_to_html(
-            high_risk_tenders[['tender_id', 'final_risk_score', 'risk_category', 
-                               'risk_probability', 'price_anomaly', 'winner_concentration']]
-            if 'risk_probability' in high_risk_tenders.columns else
-            high_risk_tenders[['tender_id', 'final_risk_score', 'risk_category', 
+            high_risk_tenders[['tender_id', 'final_risk_score', 'risk_category',
+                               'top_3_reasons_text', 'factor_breakdown_text', 'risk_probability',
+                               'price_anomaly', 'winner_concentration']]
+            if 'risk_probability' in high_risk_tenders.columns and 'top_3_reasons_text' in high_risk_tenders.columns and 'factor_breakdown_text' in high_risk_tenders.columns else
+            high_risk_tenders[['tender_id', 'final_risk_score', 'risk_category',
+                               'top_3_reasons_text', 'factor_breakdown_text', 'price_anomaly', 'winner_concentration']]
+            if 'top_3_reasons_text' in high_risk_tenders.columns and 'factor_breakdown_text' in high_risk_tenders.columns else
+            high_risk_tenders[['tender_id', 'final_risk_score', 'risk_category',
                                'price_anomaly', 'winner_concentration']]
         )
         
@@ -253,6 +257,10 @@ class ReportGenerator:
             for val in row:
                 if isinstance(val, float):
                     html += f"<td>{val:.3f}</td>"
+                elif isinstance(val, list):
+                    html += f"<td>{' ; '.join([str(item) for item in val])}</td>"
+                elif isinstance(val, dict):
+                    html += f"<td>{json.dumps(val)}</td>"
                 else:
                     html += f"<td>{val}</td>"
             html += "</tr>\n"
@@ -371,6 +379,8 @@ class ReportGenerator:
             'final_risk_score',
             'risk_probability',
             'risk_category',
+            'factor_breakdown_text',
+            'top_3_reasons_text',
             'anomaly_score',
             'price_anomaly',
             'winner_concentration',

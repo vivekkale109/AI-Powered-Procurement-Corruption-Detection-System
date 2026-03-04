@@ -384,7 +384,8 @@ def show_risk_analysis():
     if len(high_risk) > 0:
         display_cols = ['tender_id', 'price_anomaly', 'winner_concentration',
                        'risk_probability',
-                       'participation_anomaly', 'network_suspicion', 'final_risk_score', 'risk_category']
+                       'participation_anomaly', 'network_suspicion', 'final_risk_score',
+                       'risk_category', 'top_3_reasons_text']
         available_cols = [col for col in display_cols if col in high_risk.columns]
         
         st.dataframe(

@@ -67,6 +67,52 @@ class RiskScorer:
 
 class TenderRiskScorer(RiskScorer):
     """Scores risk for individual tenders."""
+
+    FACTOR_LABELS = {
+        'price_anomaly': 'Unusual bid price pattern',
+        'winner_concentration': 'Winner has concentrated win pattern',
+        'participation_anomaly': 'Repeated bidder participation pattern',
+        'network_suspicion': 'Suspicious contractor network centrality',
+        'temporal_pattern': 'Irregular tender timing pattern'
+    }
+
+    def _build_explainability(self, scores: Dict, weights: Dict) -> Dict:
+        """Build factor-level contributions and top reasons."""
+        contribution_rows = []
+        for factor in ['price_anomaly', 'winner_concentration', 'participation_anomaly', 'network_suspicion', 'temporal_pattern']:
+            weight = float(weights.get(factor, {}).get('weight', 0.0))
+            raw_score = float(scores.get(factor, 0.0))
+            contribution = raw_score * weight
+            contribution_rows.append({
+                'factor': factor,
+                'label': self.FACTOR_LABELS.get(factor, factor),
+                'raw_score': round(raw_score, 6),
+                'weight': round(weight, 6),
+                'weighted_contribution': round(contribution, 6)
+            })
+
+        contribution_rows = sorted(
+            contribution_rows, key=lambda x: x['weighted_contribution'], reverse=True
+        )
+        factor_breakdown = []
+        for row in contribution_rows:
+            factor_breakdown.append(
+                f"{row['label']}={row['weighted_contribution']:.3f}"
+            )
+        top_3 = []
+        for row in contribution_rows[:3]:
+            if row['weighted_contribution'] <= 0:
+                continue
+            top_3.append(
+                f"{row['label']} (contribution={row['weighted_contribution']:.3f}, "
+                f"score={row['raw_score']:.3f}, weight={row['weight']:.3f})"
+            )
+
+        return {
+            'factor_contributions': contribution_rows,
+            'top_3_reasons': top_3,
+            'factor_breakdown_text': " | ".join(factor_breakdown)
+        }
     
     def score_tender(self, tender: pd.Series, contractor_stats: Dict = None,
                     network_analysis: Dict = None) -> Dict:
@@ -145,6 +191,12 @@ class TenderRiskScorer(RiskScorer):
         
         scores['final_risk_score'] = final_score
         scores['risk_category'] = self.get_risk_category(final_score)
+
+        explainability = self._build_explainability(scores, weights)
+        scores['factor_contributions'] = explainability['factor_contributions']
+        scores['factor_breakdown_text'] = explainability['factor_breakdown_text']
+        scores['top_3_reasons'] = explainability['top_3_reasons']
+        scores['top_3_reasons_text'] = " | ".join(explainability['top_3_reasons'])
         
         return scores
 
