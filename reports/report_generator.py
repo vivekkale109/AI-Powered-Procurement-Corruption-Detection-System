@@ -353,6 +353,7 @@ class ReportGenerator:
     def generate_final_report(self, risk_results: Dict, data: pd.DataFrame,
                               network_analysis: Optional[Dict] = None) -> str:
         """Generate one consolidated report containing all analysis sections."""
+        tender_scores = risk_results['tender_scores']
         executive_html = self.generate_executive_summary(risk_results, data)
         detailed_html = self.generate_detailed_analysis(risk_results)
         compliance_html = ComplianceReporter.generate_cvc_compliance_report(risk_results)
@@ -361,6 +362,20 @@ class ReportGenerator:
         if network_analysis:
             network_html = self.generate_network_report(network_analysis)
             network_section = self._extract_body_content(network_html)
+
+        tender_cols = [
+            'tender_id',
+            'final_risk_score',
+            'risk_category',
+            'anomaly_score',
+            'price_anomaly',
+            'winner_concentration',
+            'complementary_bids'
+        ]
+        available_tender_cols = [col for col in tender_cols if col in tender_scores.columns]
+        all_tender_scores_html = self._dataframe_to_html(
+            tender_scores.sort_values('final_risk_score', ascending=False)[available_tender_cols]
+        )
 
         final_html = """
         <html>
@@ -387,6 +402,12 @@ class ReportGenerator:
             </div>
 
             <div class="section">
+                <h2>All Tender Scores</h2>
+                <p>Total tenders scored: <strong>{total_tenders}</strong></p>
+                {all_tender_scores}
+            </div>
+
+            <div class="section">
                 <h2>Network Analysis</h2>
                 {network_section}
             </div>
@@ -403,6 +424,8 @@ class ReportGenerator:
             report_date=self.report_date,
             executive_section=self._extract_body_content(executive_html),
             detailed_section=self._extract_body_content(detailed_html),
+            total_tenders=len(tender_scores),
+            all_tender_scores=all_tender_scores_html,
             network_section=network_section,
             compliance_section=self._extract_body_content(compliance_html),
         )
