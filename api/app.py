@@ -28,12 +28,14 @@ from src.feature_engineering import FeatureEngineer
 from src.anomaly_detection import AnomalyDetectionEngine
 from src.network_analysis import NetworkAnalyzer
 from src.risk_scoring import CorruptionRiskAssessor
-from src.utils import Logger
+from src.utils import Logger, ConfigManager
 from reports.report_generator import ReportGenerator, ComplianceReporter
 
 logger = Logger(__name__)
 app = Flask(__name__)
 CORS(app)
+APP_CONFIG = ConfigManager().config or {}
+SYSTEM_CONFIG = APP_CONFIG.get("system", {}) if isinstance(APP_CONFIG, dict) else {}
 REPORTS_BASE_DIR = PROJECT_ROOT / "data" / "processed" / "reports"
 REPORTS_BASE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -231,7 +233,11 @@ def _paginate_records(records: List[Dict[str, Any]], page: int, page_size: int):
 
 def _generate_reports(risk_results, network_results, processed_df, output_dir: Path):
     """Generate HTML reports and return metadata."""
-    report_gen = ReportGenerator()
+    report_gen = ReportGenerator(
+        system_version=SYSTEM_CONFIG.get("version"),
+        model_version=SYSTEM_CONFIG.get("model_version"),
+        config_version=SYSTEM_CONFIG.get("config_version"),
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     report_files = {}
@@ -300,7 +306,7 @@ def _execute_analysis(data: List[Dict[str, Any]], options: AnalyzeOptionsModel) 
     network_analyzer = NetworkAnalyzer()
     network_results = network_analyzer.analyze(df)
 
-    assessor = CorruptionRiskAssessor()
+    assessor = CorruptionRiskAssessor(APP_CONFIG.get("risk_scoring", {}))
     risk_results = assessor.assess_risk(
         df,
         network_results,
@@ -423,7 +429,9 @@ def health():
     return jsonify(
         {
             "status": "healthy",
-            "version": "1.1.0",
+            "version": SYSTEM_CONFIG.get("version", "unknown"),
+            "model_version": SYSTEM_CONFIG.get("model_version", "unknown"),
+            "config_version": SYSTEM_CONFIG.get("config_version", "unknown"),
             "service": "procurement-corruption-detection",
             "features": ["schema-models", "pagination", "rate-limiting", "async-jobs"],
         }
@@ -459,6 +467,11 @@ def analyze():
             "validation_report": full_result["validation_report"],
             "execution_time": full_result["execution_time"],
             "request_id": uuid.uuid4().hex,
+            "metadata": {
+                "system_version": SYSTEM_CONFIG.get("version", "unknown"),
+                "model_version": SYSTEM_CONFIG.get("model_version", "unknown"),
+                "config_version": SYSTEM_CONFIG.get("config_version", "unknown"),
+            },
         }
 
         if req_model["options"]["generate_report"]:

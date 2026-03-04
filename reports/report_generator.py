@@ -9,14 +9,22 @@ from typing import Dict, List, Optional
 from datetime import datetime
 import json
 from jinja2 import Template
+from src.utils import ConfigManager
 
 
 class ReportGenerator:
     """Generates analytical reports from risk assessment results."""
     
-    def __init__(self):
+    def __init__(self, system_version: Optional[str] = None,
+                 model_version: Optional[str] = None,
+                 config_version: Optional[str] = None):
         """Initialize report generator."""
+        cfg = ConfigManager().config
+        system_cfg = cfg.get('system', {}) if isinstance(cfg, dict) else {}
         self.report_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.system_version = system_version or system_cfg.get('version', 'unknown')
+        self.model_version = model_version or system_cfg.get('model_version', self.system_version)
+        self.config_version = config_version or system_cfg.get('config_version', 'unknown')
     
     def generate_executive_summary(self, risk_results: Dict, data: pd.DataFrame) -> str:
         """
@@ -100,7 +108,8 @@ class ReportGenerator:
             <div class="footer">
                 <p>This report is based on AI-powered anomaly detection and network analysis algorithms.</p>
                 <p>All findings should be validated through appropriate governance channels.</p>
-                <p>System version: 1.0.0 | Aligned with CVC frameworks for governance oversight</p>
+                <p>System version: {system_version} | Model version: {model_version} | Config version: {config_version}</p>
+                <p>Aligned with CVC frameworks for governance oversight</p>
             </div>
         </body>
         </html>
@@ -118,7 +127,10 @@ class ReportGenerator:
             high_risk_pct=high_risk_pct,
             critical_contractors=critical_contractors,
             high_risk_contractors=high_risk_contractors,
-            findings=findings
+            findings=findings,
+            system_version=self.system_version,
+            model_version=self.model_version,
+            config_version=self.config_version
         )
         
         return html
@@ -404,6 +416,9 @@ class ReportGenerator:
         <body>
             <h1>Final Procurement Risk Report</h1>
             <p><strong>Generated:</strong> {report_date}</p>
+            <p><strong>System Version:</strong> {system_version} |
+               <strong>Model Version:</strong> {model_version} |
+               <strong>Config Version:</strong> {config_version}</p>
 
             <div class="section">
                 <h2>Executive Summary</h2>
@@ -436,6 +451,9 @@ class ReportGenerator:
 
         return final_html.format(
             report_date=self.report_date,
+            system_version=self.system_version,
+            model_version=self.model_version,
+            config_version=self.config_version,
             executive_section=self._extract_body_content(executive_html),
             detailed_section=self._extract_body_content(detailed_html),
             total_tenders=len(tender_scores),

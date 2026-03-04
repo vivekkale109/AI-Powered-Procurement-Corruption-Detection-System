@@ -4,6 +4,8 @@
 system:
   name: "Procurement Corruption Detection System"
   version: "1.0.0"
+  model_version: "1.0.0"
+  config_version: "2026-03-04.1"
   environment: "development"
   debug: true
 
@@ -53,18 +55,66 @@ anomaly_detection:
 
 # Risk Scoring Settings
 risk_scoring:
-  weights:
-    win_frequency_concentration: 0.25
-    bid_collusion_likelihood: 0.25
-    price_anomaly: 0.15
-    participation_pattern: 0.15
-    time_based_suspicion: 0.10
-    network_centrality: 0.10
-  
-  thresholds:
-    high_risk: 0.70
-    medium_risk: 0.40
-    low_risk: 0.00
+  tender_risk_factors:
+    price_anomaly:
+      weight: 0.20
+    winner_concentration:
+      weight: 0.25
+    participation_anomaly:
+      weight: 0.18
+    network_suspicion:
+      weight: 0.20
+    temporal_pattern:
+      weight: 0.17
+
+  contractor_risk_factors:
+    win_concentration:
+      weight: 0.25
+    geographic_concentration:
+      weight: 0.17
+    department_concentration:
+      weight: 0.18
+    network_centrality:
+      weight: 0.20
+    rotation_pattern:
+      weight: 0.20
+
+  department_risk_factors:
+    anomaly_concentration:
+      weight: 0.25
+    winner_diversity:
+      weight: 0.25
+    price_inflation:
+      weight: 0.20
+    network_density:
+      weight: 0.15
+
+  risk_thresholds:
+    tender_level:
+      critical: 0.85
+      high: 0.70
+      medium: 0.40
+      low: 0.15
+    contractor_level:
+      critical: 0.80
+      high: 0.65
+      medium: 0.40
+      low: 0.15
+    department_level:
+      critical: 0.75
+      high: 0.60
+      medium: 0.40
+      low: 0.20
+
+  constants:
+    tender_price_zscore_divisor: 3.0
+    contractor_win_rate_multiplier: 1.5
+    network_betweenness_weight: 0.7
+    department_anomaly_threshold: 0.5
+    department_winner_hhi_normalizer: 0.3
+    department_expected_bidders_per_tender: 3
+    price_ratio_expected_baseline: 1.0
+    department_complaint_history_placeholder: 0.05
 
 # Model Reliability & Calibration
 model_reliability:

@@ -12,7 +12,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss
 warnings.filterwarnings('ignore')
 
-from .utils import Logger, load_risk_weights, calculate_herfindahl_index
+from .utils import Logger, load_risk_weights, calculate_herfindahl_index, ConfigManager
 
 logger = Logger(__name__)
 
@@ -20,7 +20,7 @@ logger = Logger(__name__)
 class RiskScorer:
     """Base class for risk scoring."""
     
-    def __init__(self, weights_config: Dict = None):
+    def __init__(self, weights_config: Dict = None, scorer_type: str = "tender"):
         """
         Initialize scorer.
         
@@ -28,7 +28,16 @@ class RiskScorer:
             weights_config: Dictionary with risk weights
         """
         self.weights_config = weights_config or load_risk_weights()
+        self.scorer_type = scorer_type
         self.risk_scores = {}
+        default_thresholds = {
+            'critical': 0.85,
+            'high': 0.70,
+            'medium': 0.40,
+            'low': 0.00
+        }
+        thresholds_root = self.weights_config.get('risk_thresholds', {})
+        self.thresholds_config = thresholds_root.get(f'{self.scorer_type}_level', default_thresholds)
     
     def normalize_score(self, score: float, min_val: float = 0, max_val: float = 1) -> float:
         """Normalize score to 0-1 range."""
@@ -48,12 +57,7 @@ class RiskScorer:
             Risk category
         """
         if thresholds is None:
-            thresholds = {
-                'critical': 0.85,
-                'high': 0.70,
-                'medium': 0.40,
-                'low': 0.00
-            }
+            thresholds = self.thresholds_config
         
         if score >= thresholds.get('critical', 0.85):
             return 'CRITICAL'
@@ -67,6 +71,11 @@ class RiskScorer:
 
 class TenderRiskScorer(RiskScorer):
     """Scores risk for individual tenders."""
+
+    def __init__(self, weights_config: Dict = None):
+        super().__init__(weights_config=weights_config, scorer_type="tender")
+        self.tender_factors = self.weights_config.get("tender_risk_factors", {})
+        self.constants = self.weights_config.get("constants", {})
 
     FACTOR_LABELS = {
         'price_anomaly': 'Unusual bid price pattern',
@@ -132,7 +141,10 @@ class TenderRiskScorer(RiskScorer):
         # 1. Price anomaly
         price_score = 0
         if 'bid_deviation_zscore' in tender.index and pd.notna(tender['bid_deviation_zscore']):
-            price_score = min(abs(tender['bid_deviation_zscore']) / 3.0, 1.0)
+            price_score = min(
+                abs(tender['bid_deviation_zscore']) / self.constants.get('tender_price_zscore_divisor', 3.0),
+                1.0
+            )
         scores['price_anomaly'] = price_score
         
         # 2. Winner concentration (win rate)
@@ -141,7 +153,9 @@ class TenderRiskScorer(RiskScorer):
             stats = contractor_stats[tender['winning_bidder_normalized']]
             win_rate = stats.get('win_rate', 0)
             # High win rate is suspicious
-            winner_score = min(win_rate * 1.5, 1.0)
+            winner_score = min(
+                win_rate * self.constants.get('contractor_win_rate_multiplier', 1.5), 1.0
+            )
         scores['winner_concentration'] = winner_score
         
         # 3. Bid participation anomaly
@@ -171,7 +185,7 @@ class TenderRiskScorer(RiskScorer):
                 # High centrality + high betweenness = suspicious
                 network_score = np.mean([
                     centrality_data.get('degree', 0),
-                    centrality_data.get('betweenness', 0) * 0.7
+                    centrality_data.get('betweenness', 0) * self.constants.get('network_betweenness_weight', 0.7)
                 ])
         scores['network_suspicion'] = network_score
         
@@ -180,7 +194,7 @@ class TenderRiskScorer(RiskScorer):
         scores['anomaly_detection'] = anomaly_score
         
         # Compute weighted final score
-        weights = self.weights_config.get('tender_risk_factors', {})
+        weights = self.tender_factors
         final_score = (
             scores['price_anomaly'] * weights.get('price_anomaly', {}).get('weight', 0.2) +
             scores['winner_concentration'] * weights.get('winner_concentration', {}).get('weight', 0.25) +
@@ -203,6 +217,11 @@ class TenderRiskScorer(RiskScorer):
 
 class ContractorRiskScorer(RiskScorer):
     """Scores corruption risk for contractors."""
+
+    def __init__(self, weights_config: Dict = None):
+        super().__init__(weights_config=weights_config, scorer_type="contractor")
+        self.contractor_factors = self.weights_config.get("contractor_risk_factors", {})
+        self.constants = self.weights_config.get("constants", {})
     
     def score_contractors(self, df: pd.DataFrame, network_analysis: Dict = None) -> pd.DataFrame:
         """
@@ -289,7 +308,9 @@ class ContractorRiskScorer(RiskScorer):
         scores = {}
         
         # 1. Win concentration (high win rate = suspicious)
-        win_concentration_score = min(stats['win_rate'] * 1.5, 1.0)
+        win_concentration_score = min(
+            stats['win_rate'] * self.constants.get('contractor_win_rate_multiplier', 1.5), 1.0
+        )
         scores['win_concentration'] = win_concentration_score
         
         # 2. Geographic concentration (operates only in one region = suspicious)
@@ -326,7 +347,7 @@ class ContractorRiskScorer(RiskScorer):
         scores['rotation_pattern'] = rotation_score
         
         # Compute weighted final score
-        weights = self.weights_config.get('contractor_risk_factors', {})
+        weights = self.contractor_factors
         final_score = (
             scores['win_concentration'] * weights.get('win_concentration', {}).get('weight', 0.25) +
             scores['geographic_concentration'] * weights.get('geographic_concentration', {}).get('weight', 0.17) +
@@ -347,6 +368,11 @@ class ContractorRiskScorer(RiskScorer):
 
 class DepartmentRiskScorer(RiskScorer):
     """Scores corruption risk for departments."""
+
+    def __init__(self, weights_config: Dict = None):
+        super().__init__(weights_config=weights_config, scorer_type="department")
+        self.department_factors = self.weights_config.get("department_risk_factors", {})
+        self.constants = self.weights_config.get("constants", {})
     
     def score_departments(self, df: pd.DataFrame, tender_risk_scores: pd.DataFrame = None) -> pd.DataFrame:
         """
@@ -389,7 +415,9 @@ class DepartmentRiskScorer(RiskScorer):
         # 1. Anomaly concentration
         if tender_scores is not None:
             anomaly_col = 'anomaly_score' if 'anomaly_score' in tender_scores.columns else 'anomaly_detection'
-            anomaly_count = (tender_scores[anomaly_col] > 0.5).sum() if anomaly_col in tender_scores.columns else 0
+            anomaly_count = (
+                tender_scores[anomaly_col] > self.constants.get('department_anomaly_threshold', 0.5)
+            ).sum() if anomaly_col in tender_scores.columns else 0
             anomaly_concentration = anomaly_count / len(tender_scores) if len(tender_scores) > 0 else 0
         else:
             anomaly_concentration = 0
@@ -402,7 +430,9 @@ class DepartmentRiskScorer(RiskScorer):
             shares = winners.values / total_tenders
             hhi = calculate_herfindahl_index(shares.tolist())
             # Normalize HHI to 0-1 range
-            winner_concentration = min(hhi / 0.3, 1.0)
+            winner_concentration = min(
+                hhi / self.constants.get('department_winner_hhi_normalizer', 0.3), 1.0
+            )
         else:
             winner_concentration = 0
         scores['winner_concentration'] = winner_concentration
@@ -415,7 +445,8 @@ class DepartmentRiskScorer(RiskScorer):
             if len(price_ratios) > 0:
                 # Deviation from expected (1.0)
                 avg_ratio = price_ratios.mean()
-                price_deviation = abs(avg_ratio - 1.0) / 1.0
+                baseline = self.constants.get('price_ratio_expected_baseline', 1.0)
+                price_deviation = abs(avg_ratio - baseline) / baseline if baseline != 0 else 0
                 price_score = min(price_deviation, 1.0)
             else:
                 price_score = 0
@@ -429,18 +460,19 @@ class DepartmentRiskScorer(RiskScorer):
             if isinstance(bidders, list):
                 total_bidders.update(bidders)
         
-        bidder_diversity = len(total_bidders) / (len(dept_data) * 3) if len(dept_data) > 0 else 0
+        bidder_diversity_expected = self.constants.get('department_expected_bidders_per_tender', 3)
+        bidder_diversity = len(total_bidders) / (len(dept_data) * bidder_diversity_expected) if len(dept_data) > 0 else 0
         bidder_concentration = 1 - min(bidder_diversity, 1.0)
         scores['bidder_concentration'] = bidder_concentration
         
         # Compute weighted final score
-        weights = self.weights_config.get('department_risk_factors', {})
+        weights = self.department_factors
         final_score = (
             scores['anomaly_concentration'] * weights.get('anomaly_concentration', {}).get('weight', 0.25) +
             scores['winner_concentration'] * weights.get('winner_diversity', {}).get('weight', 0.25) +
             scores['price_inflation'] * weights.get('price_inflation', {}).get('weight', 0.2) +
             scores['bidder_concentration'] * weights.get('network_density', {}).get('weight', 0.15) +
-            0.05  # Complaint history placeholder
+            self.constants.get('department_complaint_history_placeholder', 0.05)
         )
         
         scores['final_risk_score'] = min(final_score, 1.0)
@@ -456,7 +488,7 @@ class CorruptionRiskAssessor:
     
     def __init__(self, weights_config: Dict = None):
         """Initialize assessor."""
-        self.weights_config = weights_config or load_risk_weights()
+        self.weights_config = weights_config or ConfigManager().get("risk_scoring", {}) or load_risk_weights()
         self.tender_scorer = TenderRiskScorer(self.weights_config)
         self.contractor_scorer = ContractorRiskScorer(self.weights_config)
         self.dept_scorer = DepartmentRiskScorer(self.weights_config)

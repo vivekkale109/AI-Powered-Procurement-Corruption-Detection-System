@@ -19,7 +19,7 @@ from src.feature_engineering import FeatureEngineer, BidAnalyzer, ContractorAnal
 from src.anomaly_detection import AnomalyDetectionEngine, BidGapAnalyzer, PriceAnomalyDetector
 from src.network_analysis import NetworkAnalyzer
 from src.risk_scoring import CorruptionRiskAssessor
-from src.utils import Logger, save_results, load_results
+from src.utils import Logger, save_results, load_results, ConfigManager
 from reports.report_generator import ReportGenerator, ComplianceReporter
 from data.generate_sample_data import ProcurementDataGenerator
 
@@ -31,7 +31,7 @@ class ProcurementAnalysisPipeline:
     
     def __init__(self, config: dict = None):
         """Initialize pipeline."""
-        self.config = config or {}
+        self.config = config or ConfigManager().config or {}
         self.data = None
         self.results = {}
     
@@ -164,7 +164,7 @@ class ProcurementAnalysisPipeline:
     def _step_risk_scoring(self):
         """Step 5: Risk scoring."""
         reliability_cfg = self.config.get('model_reliability', {})
-        assessor = CorruptionRiskAssessor()
+        assessor = CorruptionRiskAssessor(self.config.get('risk_scoring', {}))
         risk_results = assessor.assess_risk(
             self.data,
             self.results.get('network'),
@@ -237,7 +237,11 @@ class ProcurementAnalysisPipeline:
         if 'risk' not in self.results:
             return
         
-        report_gen = ReportGenerator()
+        report_gen = ReportGenerator(
+            system_version=self.config.get('system', {}).get('version'),
+            model_version=self.config.get('system', {}).get('model_version'),
+            config_version=self.config.get('system', {}).get('config_version')
+        )
         
         # Executive summary
         exec_summary = report_gen.generate_executive_summary(

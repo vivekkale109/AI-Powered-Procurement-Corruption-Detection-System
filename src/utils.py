@@ -79,13 +79,24 @@ class Logger:
 
 
 def load_risk_weights(weights_path: str = "config/risk_weights.yaml") -> Dict[str, Any]:
-    """Load risk scoring weights from configuration."""
+    """
+    Load risk scoring config.
+    Primary source is config/config.yaml:risk_scoring, with legacy fallback.
+    """
+    cfg = ConfigManager().get("risk_scoring", {})
+    if isinstance(cfg, dict) and cfg:
+        return cfg
     try:
         with open(weights_path, 'r') as f:
             return yaml.safe_load(f)
     except FileNotFoundError:
         logging.warning(f"Risk weights file not found at {weights_path}")
         return {}
+
+
+def load_system_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
+    """Load full system configuration."""
+    return ConfigManager(config_path=config_path).config
 
 
 def normalize_contractor_name(name: str) -> str:
