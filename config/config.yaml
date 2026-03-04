@@ -1,0 +1,109 @@
+# Configuration for Procurement Corruption Detection System
+
+# System Settings
+system:
+  name: "Procurement Corruption Detection System"
+  version: "1.0.0"
+  environment: "development"
+  debug: true
+
+# Data Settings
+data:
+  input_path: "data/raw"
+  output_path: "data/processed"
+  processed_cache: "data/cache"
+  max_file_size_mb: 500
+
+# Preprocessing Settings
+preprocessing:
+  normalize_contractor_names: true
+  similarity_threshold: 0.85  # For fuzzy matching
+  handle_missing_values: true
+  missing_value_strategy: "mean"  # mean, median, drop
+  remove_duplicates: true
+
+# Feature Engineering Settings
+features:
+  compute_win_frequency: true
+  compute_bid_deviations: true
+  compute_participation_patterns: true
+  compute_time_intervals: true
+  compute_geographic_concentration: true
+  time_window_days: 365  # Annual analysis window
+
+# Anomaly Detection Settings
+anomaly_detection:
+  isolation_forest:
+    enabled: true
+    contamination: 0.05  # Expected proportion of anomalies
+    n_estimators: 100
+    max_samples: "auto"
+    random_state: 42
+
+  local_outlier_factor:
+    enabled: true
+    n_neighbors: 20
+    contamination: 0.05
+    algorithm: "auto"
+
+  statistical:
+    enabled: true
+    z_score_threshold: 3.0  # Standard deviations
+    iqr_multiplier: 1.5
+
+# Risk Scoring Settings
+risk_scoring:
+  weights:
+    win_frequency_concentration: 0.25
+    bid_collusion_likelihood: 0.25
+    price_anomaly: 0.15
+    participation_pattern: 0.15
+    time_based_suspicion: 0.10
+    network_centrality: 0.10
+  
+  thresholds:
+    high_risk: 0.70
+    medium_risk: 0.40
+    low_risk: 0.00
+
+# Network Analysis Settings
+network_analysis:
+  min_participation_threshold: 3  # Minimum bids to be in network
+  temporal_window_days: 730  # 2-year window for co-participation
+  detect_communities: true
+  community_algorithm: "louvain"  # or "modularity"
+  minimum_edge_weight: 2  # Minimum co-participated tenders
+
+# Dashboard Settings
+dashboard:
+  host: "localhost"
+  port: 8501
+  theme: "light"
+  enable_caching: true
+  cache_ttl_minutes: 60
+
+# Database Settings
+database:
+  enabled: false
+  backend: "postgresql"  # postgresql, mysql, sqlite
+  hostname: "localhost"
+  port: 5432
+  database: "procurement_db"
+  username: "user"
+  password: ""
+  
+# Report Settings
+reports:
+  output_format: ["html", "pdf"]
+  include_visualizations: true
+  include_network_graphs: true
+  max_top_items: 10
+  confidentiality_level: "internal"
+
+# Logging
+logging:
+  level: "INFO"
+  format: "json"
+  output_file: "logs/system.log"
+  max_file_size_mb: 100
+  backup_count: 5

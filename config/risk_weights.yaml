@@ -1,0 +1,188 @@
+# Risk Scoring Weights and Thresholds
+
+# Tender-Level Risk Factors
+tender_risk_factors:
+  price_anomaly:
+    description: "Bid amount significantly differs from estimates or historical norms"
+    weight: 0.20
+    indicators:
+      - "Price deviation beyond 3 sigma"
+      - "Unusual bid concentration"
+      - "Suspicious price clustering"
+
+  winner_concentration:
+    description: "Single contractor wins disproportionate number of tenders"
+    weight: 0.25
+    indicators:
+      - "Win rate > department average + 2*stdev"
+      - "Repeat wins in same category"
+      - "Geographic monopoly"
+
+  participation_anomaly:
+    description: "Unexpected bidder participation patterns"
+    weight: 0.18
+    indicators:
+      - "Identical set of bidders across tenders"
+      - "Complementary bids (high/low pair)"
+      - "Same contractors in different sectors"
+
+  network_suspicion:
+    description: "Co-participating contractors form tight clusters"
+    weight: 0.20
+    indicators:
+      - "High clustering coefficient"
+      - "Repeated co-participation"
+      - "Rotation patterns detected"
+
+  temporal_pattern:
+    description: "Suspicious timing patterns in bidding"
+    weight: 0.17
+    indicators:
+      - "Bid submission at deadline"
+      - "Unusual intervals between wins"
+      - "Synchronized withdrawal patterns"
+
+# Contractor-Level Risk Factors
+contractor_risk_factors:
+  win_concentration:
+    description: "Contractor dominates specific tender categories"
+    weight: 0.25
+    thresholds:
+      very_high: 0.80  # Wins >80% of participated tenders
+      high: 0.65
+      medium: 0.50
+      low: 0.35
+
+  price_behavior:
+    description: "Abnormal bid pricing patterns"
+    weight: 0.20
+    indicators:
+      - "Consistent lowest bid"
+      - "Bid clustering around average"
+      - "Sharp price variations"
+
+  network_centrality:
+    description: "Position in bidder network graph"
+    weight: 0.20
+    indicators:
+      - "High degree centrality"
+      - "High betweenness centrality"
+      - "In multiple tight clusters"
+
+  temporal_consistency:
+    description: "Timing patterns of wins and participations"
+    weight: 0.18
+    indicators:
+      - "Regular winning intervals"
+      - "Synchronized participation"
+      - "Unusual temporal gaps"
+
+  geographic_concentration:
+    description: "Geographic spread of contractor operations"
+    weight: 0.17
+    thresholds:
+      high_risk: 0.80  # >80% wins in one region
+      medium_risk: 0.60
+      low_risk: 0.40
+
+# Department-Level Risk Factors
+department_risk_factors:
+  anomaly_concentration:
+    description: "Percentage of tenders with anomalies"
+    weight: 0.25
+    thresholds:
+      high_risk: 0.30  # >30% tenders flagged
+      medium_risk: 0.15
+      low_risk: 0.05
+
+  winner_diversity:
+    description: "Herfindahl-Hirschman Index of winner concentration"
+    weight: 0.25
+    thresholds:
+      high_risk: 0.20  # HHI > 2500 equivalent
+      medium_risk: 0.12
+      low_risk: 0.06
+
+  price_inflation:
+    description: "Deviation from market rates"
+    weight: 0.20
+    thresholds:
+      high_risk: 0.35  # Avg 35% above market
+      medium_risk: 0.20
+      low_risk: 0.10
+
+  network_density:
+    description: "Density of co-participation network"
+    weight: 0.15
+    thresholds:
+      high_risk: 0.50
+      medium_risk: 0.30
+      low_risk: 0.15
+
+  complaint_history:
+    description: "Historical complaints and audits"
+    weight: 0.15
+    indicators:
+      - "Previous CVC flags"
+      - "RTI complaints"
+      - "Media coverage"
+
+# Collusion Indicators
+collusion_detection:
+  bid_complement_score:
+    description: "Tendency for bids to be complementary (one high, one low)"
+    weight: 0.25
+
+  co_participation:
+    description: "Frequency of simultaneous participation"
+    weight: 0.25
+
+  communication_network:
+    description: "Inferred connections between contractors"
+    weight: 0.20
+
+  submission_timing:
+    description: "Synchronized submission patterns"
+    weight: 0.15
+
+  price_convergence:
+    description: "Bid amounts converge to similar values"
+    weight: 0.15
+
+# Rotation Pattern Indicators
+rotation_detection:
+  win_sequence:
+    description: "Pattern in sequence of winners"
+    weight: 0.30
+
+  bidder_rotation:
+    description: "Systematic rotation of contractors"
+    weight: 0.25
+
+  temporal_regularity:
+    description: "Winning intervals are predictable"
+    weight: 0.25
+
+  network_structure:
+    description: "Graph structure suggests rotation"
+    weight: 0.20
+
+# Risk Thresholds (Global)
+risk_thresholds:
+  tender_level:
+    critical: 0.85
+    high: 0.70
+    medium: 0.40
+    low: 0.15
+
+  contractor_level:
+    critical: 0.80
+    high: 0.65
+    medium: 0.40
+    low: 0.15
+
+  department_level:
+    critical: 0.75
+    high: 0.60
+    medium: 0.40
+    low: 0.20
