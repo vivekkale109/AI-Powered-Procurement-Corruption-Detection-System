@@ -272,6 +272,10 @@ def _generate_reports(risk_results, network_results, processed_df, output_dir: P
     final_path.write_text(final_html, encoding="utf-8")
     report_files["final_report_all_analysis"] = final_path.name
 
+    tender_scores_csv_path = output_dir / "all_tender_scores.csv"
+    risk_results["tender_scores"].to_csv(tender_scores_csv_path, index=False)
+    report_files["all_tender_scores_csv"] = tender_scores_csv_path.name
+
     return report_files
 
 
@@ -616,7 +620,10 @@ def get_contractor_risk(contractor):
 def list_reports(run_id):
     """List generated reports for a specific analysis run."""
     run_dir = _get_run_dir(run_id)
-    files = sorted([p.name for p in run_dir.glob("*.html") if p.is_file()])
+    files = sorted([
+        p.name for p in run_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in (".html", ".csv")
+    ])
     return jsonify(
         {
             "status": "success",
@@ -634,25 +641,29 @@ def download_report(run_id, report_name):
     run_dir = _get_run_dir(run_id)
     file_path = (run_dir / report_name).resolve()
 
-    if run_dir not in file_path.parents or not file_path.exists() or file_path.suffix.lower() != ".html":
+    if run_dir not in file_path.parents or not file_path.exists() or file_path.suffix.lower() not in (".html", ".csv"):
         abort(404, description="Report file not found")
 
-    return send_file(file_path, as_attachment=True, download_name=file_path.name, mimetype="text/html")
+    mime = "text/html" if file_path.suffix.lower() == ".html" else "text/csv"
+    return send_file(file_path, as_attachment=True, download_name=file_path.name, mimetype=mime)
 
 
 @app.route("/api/v1/reports/<run_id>/download/all", methods=["GET"])
 def download_all_reports(run_id):
     """Download all generated reports for a run as ZIP."""
     run_dir = _get_run_dir(run_id)
-    html_files = sorted([p for p in run_dir.glob("*.html") if p.is_file()])
-    if not html_files:
+    report_files = sorted([
+        p for p in run_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in (".html", ".csv")
+    ])
+    if not report_files:
         abort(404, description="No reports available for this run")
 
     zip_buffer = io.BytesIO()
     import zipfile
 
     with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for file_path in html_files:
+        for file_path in report_files:
             zf.write(file_path, arcname=file_path.name)
 
     zip_buffer.seek(0)

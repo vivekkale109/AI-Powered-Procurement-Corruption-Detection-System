@@ -380,6 +380,7 @@ class ReportGenerator:
         executive_html = self.generate_executive_summary(risk_results, data)
         detailed_html = self.generate_detailed_analysis(risk_results)
         compliance_html = ComplianceReporter.generate_cvc_compliance_report(risk_results)
+        dept_trends_html, contractor_drift_html = self._generate_trend_sections(tender_scores, data)
 
         network_section = "<p>Network analysis data not available.</p>"
         if network_analysis:
@@ -437,6 +438,16 @@ class ReportGenerator:
             </div>
 
             <div class="section">
+                <h2>Department Risk Trends Over Time</h2>
+                {department_trends}
+            </div>
+
+            <div class="section">
+                <h2>Contractor Behavior Drift</h2>
+                {contractor_drift}
+            </div>
+
+            <div class="section">
                 <h2>Network Analysis</h2>
                 {network_section}
             </div>
@@ -458,9 +469,78 @@ class ReportGenerator:
             detailed_section=self._extract_body_content(detailed_html),
             total_tenders=len(tender_scores),
             all_tender_scores=all_tender_scores_html,
+            department_trends=dept_trends_html,
+            contractor_drift=contractor_drift_html,
             network_section=network_section,
             compliance_section=self._extract_body_content(compliance_html),
         )
+
+    def _generate_trend_sections(self, tender_scores: pd.DataFrame, data: pd.DataFrame):
+        """Generate trend sections: department-over-time and contractor behavior drift."""
+        if 'tender_id' not in tender_scores.columns or 'tender_id' not in data.columns:
+            return "<p>Trend analysis unavailable (missing tender_id).</p>", "<p>Drift analysis unavailable.</p>"
+
+        trend_df = data[['tender_id', 'department', 'winning_bidder_normalized', 'tender_date']].copy()
+        trend_df = trend_df.merge(
+            tender_scores[['tender_id', 'final_risk_score', 'risk_probability']],
+            on='tender_id',
+            how='left'
+        )
+        trend_df['tender_date'] = pd.to_datetime(trend_df['tender_date'], errors='coerce')
+        trend_df = trend_df.dropna(subset=['tender_date'])
+        if trend_df.empty:
+            return "<p>No valid tender_date data available for trends.</p>", "<p>No valid tender_date data available for drift.</p>"
+
+        trend_df['year_month'] = trend_df['tender_date'].dt.to_period('M').astype(str)
+
+        # Department trends
+        dept_monthly = (
+            trend_df.groupby(['year_month', 'department'], as_index=False)
+            .agg(
+                avg_risk_score=('final_risk_score', 'mean'),
+                avg_risk_probability=('risk_probability', 'mean'),
+                tender_count=('tender_id', 'count')
+            )
+            .sort_values(['year_month', 'avg_risk_score'], ascending=[True, False])
+        )
+        dept_trends_html = self._dataframe_to_html(dept_monthly.head(50))
+
+        # Contractor drift: compare early vs late half
+        trend_df = trend_df.sort_values('tender_date')
+        mid_idx = len(trend_df) // 2
+        early_df = trend_df.iloc[:mid_idx].copy()
+        late_df = trend_df.iloc[mid_idx:].copy()
+
+        early_stats = (
+            early_df.groupby('winning_bidder_normalized', as_index=False)
+            .agg(
+                early_avg_risk=('final_risk_score', 'mean'),
+                early_avg_probability=('risk_probability', 'mean'),
+                early_wins=('tender_id', 'count')
+            )
+        )
+        late_stats = (
+            late_df.groupby('winning_bidder_normalized', as_index=False)
+            .agg(
+                late_avg_risk=('final_risk_score', 'mean'),
+                late_avg_probability=('risk_probability', 'mean'),
+                late_wins=('tender_id', 'count')
+            )
+        )
+
+        contractor_drift = early_stats.merge(
+            late_stats, on='winning_bidder_normalized', how='outer'
+        ).fillna(0)
+        contractor_drift['risk_drift'] = contractor_drift['late_avg_risk'] - contractor_drift['early_avg_risk']
+        contractor_drift['probability_drift'] = (
+            contractor_drift['late_avg_probability'] - contractor_drift['early_avg_probability']
+        )
+        contractor_drift['win_count_drift'] = contractor_drift['late_wins'] - contractor_drift['early_wins']
+        contractor_drift = contractor_drift.rename(columns={'winning_bidder_normalized': 'contractor'})
+        contractor_drift = contractor_drift.sort_values('risk_drift', ascending=False)
+        contractor_drift_html = self._dataframe_to_html(contractor_drift.head(30))
+
+        return dept_trends_html, contractor_drift_html
     
     def save_report(self, html_content: str, filepath: str):
         """Save report to HTML file."""

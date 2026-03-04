@@ -88,6 +88,10 @@ def build_reports(report_type, analysis_results, processed_data):
         )
         reports["final_report_all_analysis.html"] = html.encode("utf-8")
 
+    if report_type in ("Final Report", "All Reports", "Detailed Analysis", "Executive Summary", "Network Analysis", "Risk Rankings"):
+        tender_scores_csv = risk_results['tender_scores'].to_csv(index=False)
+        reports["all_tender_scores.csv"] = tender_scores_csv.encode("utf-8")
+
     return reports
 
 
@@ -621,11 +625,12 @@ def show_export_report():
         st.subheader("Download Reports")
 
         for filename, content in st.session_state.generated_reports.items():
+            mime = "text/csv" if filename.endswith(".csv") else "text/html"
             st.download_button(
                 label=f"Download {filename}",
                 data=content,
                 file_name=filename,
-                mime="text/html",
+                mime=mime,
                 use_container_width=True,
                 key=f"download_{filename}"
             )

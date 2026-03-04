@@ -46,14 +46,21 @@ class TestApiIntegration(unittest.TestCase):
         self.assertEqual(list_resp.status_code, 200)
         list_json = list_resp.get_json()
         self.assertIn("final_report_all_analysis.html", list_json["files"])
+        self.assertIn("all_tender_scores.csv", list_json["files"])
         self.assertGreaterEqual(len(list_json["files"]), 1)
 
-        first_file = list_json["files"][0]
-        one_download = self.client.get(f"/api/v1/reports/{list_json['run_id']}/download/{first_file}")
+        html_file = next(name for name in list_json["files"] if name.endswith(".html"))
+        one_download = self.client.get(f"/api/v1/reports/{list_json['run_id']}/download/{html_file}")
         self.assertEqual(one_download.status_code, 200)
         self.assertGreater(len(one_download.data), 0)
         self.assertIn("text/html", one_download.content_type)
         one_download.close()
+
+        csv_download = self.client.get(f"/api/v1/reports/{list_json['run_id']}/download/all_tender_scores.csv")
+        self.assertEqual(csv_download.status_code, 200)
+        self.assertGreater(len(csv_download.data), 0)
+        self.assertIn("text/csv", csv_download.content_type)
+        csv_download.close()
 
         all_download = self.client.get(f"/api/v1/reports/{list_json['run_id']}/download/all")
         self.assertEqual(all_download.status_code, 200)
