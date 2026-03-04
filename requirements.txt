@@ -19,3 +19,4 @@ psycopg2-binary==2.9.9
 PyYAML==6.0.2
 Jinja2==3.1.4
 openpyxl==3.1.5
+ 
