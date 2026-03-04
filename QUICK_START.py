@@ -1,220 +1,108 @@
 #!/usr/bin/env python3
-"""
-Quick start guide and example usage.
-"""
+"""Quick start helper for the current project setup."""
 
-import os
-import sys
-import subprocess
 from pathlib import Path
+import os
 
-def run_command(cmd, description):
-    """Run a command and print status."""
-    print(f"\n{'='*60}")
-    print(f"{description}")
-    print(f"{'='*60}")
-    result = subprocess.run(cmd, shell=True, cwd="/home/karl/project")
-    return result.returncode == 0
+
+def _exists(path: Path) -> str:
+    return "OK" if path.exists() else "MISSING"
+
 
 def main():
-    project_root = Path("/home/karl/project")
+    project_root = Path(__file__).resolve().parent
     os.chdir(project_root)
-    
-    print("\n")
-    print("╔" + "="*58 + "╗")
-    print("║" + " "*10 + "PROCUREMENT CORRUPTION DETECTION" + " "*15 + "║")
-    print("║" + " "*16 + "AI-Powered Analysis Platform" + " "*14 + "║")
-    print("╚" + "="*58 + "╝")
-    
-    print("\n📋 QUICK START GUIDE\n")
-    
-    # Step 1: Check Python and dependencies
-    print("Step 1: Environment Setup")
-    print("-" * 40)
-    
-    # Check if requirements are installed
-    try:
-        import pandas
-        import numpy
-        import sklearn
-        print("✓ Core dependencies installed")
-    except ImportError:
-        print("⚠ Installing dependencies...")
-        run_command("pip install -r requirements.txt", "Installing packages...")
-    
-    # Step 2: Generate sample data
-    print("\nStep 2: Generate Sample Data")
-    print("-" * 40)
-    
-    sample_data = project_root / "data" / "raw" / "sample_tenders.csv"
-    
-    if not sample_data.exists():
-        print("Generating sample procurement data...")
-        run_command(
-            "python data/generate_sample_data.py",
-            "Generating Sample Data"
-        )
-    else:
-        print(f"✓ Sample data exists: {sample_data}")
-    
-    # Step 3: Run analysis
-    print("\nStep 3: Run Analysis Pipeline")
-    print("-" * 40)
-    print("""
-To run the complete analysis pipeline:
 
-  python src/main.py --input data/raw/sample_tenders.csv --output data/processed
-  
-This will:
-  1. Load and validate procurement data
-  2. Engineer 15+ features
-  3. Run anomaly detection (Isolation Forest, LOF)
-  4. Analyze contractor networks
-  5. Score corruption risk
-  6. Generate reports
-""")
-    
-    # Step 4: Launch dashboard
-    print("\nStep 4: Interactive Dashboard")
-    print("-" * 40)
-    print("""
-To launch the interactive dashboard:
+    print("=" * 72)
+    print("PROCUREMENT CORRUPTION DETECTION - QUICK START")
+    print("=" * 72)
+    print(f"Project root: {project_root}")
+    print("")
 
-  streamlit run dashboard/app.py
-  
-The dashboard provides:
-  - Risk analysis visualization
-  - Network graphs
-  - Contractor rankings
-  - Department insights
-  - Export capabilities
-""")
-    
-    # Step 5: System capabilities
-    print("\nStep 5: System Capabilities")
-    print("-" * 40)
-    print("""
-✓ Data Ingestion
-  - Load tender records from CSV/JSON
-  - Validate data quality
-  - Handle missing values
+    print("1) Environment")
+    print("-" * 72)
+    print("Recommended Python version: 3.11.9 (see .python-version)")
+    print("Setup commands:")
+    print("  python3.11 -m venv .venv")
+    print("  source .venv/bin/activate")
+    print("  pip install -r requirements.txt")
+    print("")
 
-✓ Feature Engineering
-  - 15+ advanced features
-  - Bid deviation analysis
-  - Contractor win patterns
-  - Temporal analysis
-  - Geographic concentration
+    print("2) Core Run Commands")
+    print("-" * 72)
+    print("Start API:")
+    print("  python api/app.py")
+    print("  API base: http://localhost:5000")
+    print("  Health:   http://localhost:5000/api/v1/health")
+    print("  Ready:    http://localhost:5000/api/v1/ready")
+    print("")
+    print("Start dashboard (new terminal):")
+    print("  streamlit run dashboard/app.py")
+    print("  Dashboard: http://localhost:8501")
+    print("")
 
-✓ Anomaly Detection
-  - Isolation Forest (100 estimators)
-  - Local Outlier Factor
-  - Statistical detection (Z-scores, IQR)
-  - Multi-algorithm ensemble
+    print("3) Pipeline + Reports")
+    print("-" * 72)
+    print("Run full batch pipeline:")
+    print("  python src/main.py --input data/raw/sample_tenders.csv --output data/processed")
+    print("")
+    print("Generate sample data (if needed):")
+    print("  python data/generate_sample_data.py")
+    print("")
+    print("Report endpoints are secured:")
+    print("  - List reports requires API key (X-API-Key or Authorization: Bearer ...)")
+    print("  - Download supports API key OR signed URL")
+    print("  - Signed URL TTL configured in config/config.yaml")
+    print("")
 
-✓ Network Analysis
-  - Co-participation graphs
-  - Community detection
-  - Centrality analysis
-  - Bid rotation detection
-  - Suspicious cluster identification
+    print("4) Dev/Quality Commands")
+    print("-" * 72)
+    print("Using Makefile:")
+    print("  make setup")
+    print("  make test")
+    print("  make benchmark-regression")
+    print("  make ci")
+    print("")
+    print("Direct commands:")
+    print("  python -m unittest discover -s tests -p 'test_*.py'")
+    print("  python -m benchmarks.regression --dataset data/benchmarks/tender_regression_dataset.csv "
+          "--baseline benchmarks/risk_score_baseline.json")
+    print("")
 
-✓ Risk Scoring
-  - Tender-level risk (0-1 scale)
-  - Contractor evaluation
-  - Department analysis
-  - Multi-factor weighted scoring
+    print("5) Container Run")
+    print("-" * 72)
+    print("Docker compose:")
+    print("  docker compose up --build")
+    print("")
+    print("Container checks configured:")
+    print("  - API: /api/v1/ready")
+    print("  - Dashboard: /_stcore/health")
+    print("  - Postgres: pg_isready")
+    print("")
 
-✓ Reporting
-  - Executive summaries
-  - Detailed analysis
-  - Network insights
-  - CVC compliance reports
-  - HTML/JSON export
-""")
-    
-    # Step 6: Configuration
-    print("\nStep 6: Configuration")
-    print("-" * 40)
-    print("""
-Key configuration files:
-  - config/config.yaml        : System settings
-  - config/risk_weights.yaml : Risk scoring weights
-  
-Customize:
-  - Contamination thresholds
-  - Risk weights and factors
-  - Community detection parameters
-  - Report generation options
-""")
-    
-    # Step 7: Project structure
-    print("\nStep 7: Project Structure")
-    print("-" * 40)
-    print("""
-src/
-  ├── main.py                  : CLI orchestration
-  ├── __init__.py             : Package init
-  ├── data_ingestion.py       : Load & validate
-  ├── preprocessing.py        : Clean data
-  ├── feature_engineering.py  : Compute features
-  ├── anomaly_detection.py    : ML detection
-  ├── network_analysis.py     : Graph analysis
-  ├── risk_scoring.py         : Risk assessment
-  └── utils.py                : Utilities
+    print("6) Key Files Status")
+    print("-" * 72)
+    paths = [
+        project_root / "api" / "app.py",
+        project_root / "config" / "config.yaml",
+        project_root / "docker-compose.yml",
+        project_root / "Dockerfile",
+        project_root / ".github" / "workflows" / "ci.yml",
+        project_root / "benchmarks" / "regression.py",
+        project_root / "benchmarks" / "risk_score_baseline.json",
+        project_root / "data" / "benchmarks" / "tender_regression_dataset.csv",
+        project_root / "Makefile",
+        project_root / "requirements.txt",
+        project_root / "requirements-dev.txt",
+    ]
+    for p in paths:
+        print(f"  [{_exists(p):7}] {p.relative_to(project_root)}")
 
-dashboard/
-  └── app.py                   : Streamlit dashboard
+    print("")
+    print("=" * 72)
+    print("Done. Start with: source .venv/bin/activate && python api/app.py")
+    print("=" * 72)
 
-reports/
-  └── report_generator.py     : Report creation
-
-config/
-  ├── config.yaml             : Configuration
-  └── risk_weights.yaml       : Weights
-
-data/
-  ├── raw/                     : Raw datasets
-  ├── processed/              : Results
-  └── generate_sample_data.py : Sample generator
-""")
-    
-    # Step 8: Next steps
-    print("\nStep 8: Getting Started")
-    print("-" * 40)
-    print("""
-Quick Start Commands:
-
-1. Generate sample data:
-   python data/generate_sample_data.py
-
-2. Run analysis:
-   python src/main.py --input data/raw/sample_tenders.csv
-
-3. Launch dashboard:
-   streamlit run dashboard/app.py
-
-4. View reports:
-   Open data/processed/*.html in browser
-
-5. Advanced usage:
-   python src/main.py --help
-""")
-    
-    # Documentation links
-    print("\nDocumentation")
-    print("-" * 40)
-    print("""
-📖 See README.md for:
-  - System architecture
-  - Feature descriptions
-  - API documentation
-  - Governance alignment
-""")
-    
-    print("\n" + "="*60)
-    print("System Ready! Next: Run analysis or launch dashboard")
-    print("="*60 + "\n")
 
 if __name__ == "__main__":
     main()
