@@ -374,7 +374,7 @@ class ReportGenerator:
         ]
         available_tender_cols = [col for col in tender_cols if col in tender_scores.columns]
         all_tender_scores_html = self._dataframe_to_html(
-            tender_scores.sort_values('final_risk_score', ascending=False)[available_tender_cols]
+            tender_scores.sort_values('final_risk_score', ascending=True)[available_tender_cols]
         )
 
         final_html = """
