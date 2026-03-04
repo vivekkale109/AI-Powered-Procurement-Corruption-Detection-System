@@ -13,9 +13,11 @@ import uuid
 import time
 import math
 import threading
+import json
+import traceback
 from pathlib import Path
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TypedDict
 
 # Add src to path
@@ -69,10 +71,12 @@ SUBMIT_LIMIT_PER_MIN = 20
 
 JOBS: Dict[str, Dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
+RUN_METRICS: deque = deque(maxlen=5000)
+METRICS_LOCK = threading.Lock()
 
 
 def _now_iso() -> str:
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _error_response(message: str, code: int = 400, details: Optional[Dict[str, Any]] = None):
@@ -85,6 +89,34 @@ def _error_response(message: str, code: int = 400, details: Optional[Dict[str, A
         },
     }
     return jsonify(payload), code
+
+
+def _log_event(event: str, level: str = "info", **kwargs):
+    """Emit structured log event."""
+    payload = {"timestamp": _now_iso(), "event": event, **kwargs}
+    line = json.dumps(payload, default=str)
+    if level == "error":
+        logger.error(line)
+    elif level == "warning":
+        logger.warning(line)
+    else:
+        logger.info(line)
+
+
+def _record_run_metric(run_id: str, status: str, execution_time: float = 0.0,
+                       anomaly_rate: float = 0.0, step_timings: Optional[Dict[str, float]] = None,
+                       error: Optional[str] = None, source: str = "sync"):
+    with METRICS_LOCK:
+        RUN_METRICS.append({
+            "run_id": run_id,
+            "status": status,
+            "execution_time_sec": float(execution_time),
+            "anomaly_rate": float(anomaly_rate),
+            "step_timings": step_timings or {},
+            "error": error,
+            "source": source,
+            "timestamp": _now_iso(),
+        })
 
 
 def _client_id() -> str:
@@ -287,43 +319,71 @@ def _get_run_dir(run_id: str) -> Path:
     return run_dir
 
 
-def _execute_analysis(data: List[Dict[str, Any]], options: AnalyzeOptionsModel) -> Dict[str, Any]:
+def _execute_analysis(data: List[Dict[str, Any]], options: AnalyzeOptionsModel,
+                      run_id: Optional[str] = None, source: str = "sync") -> Dict[str, Any]:
     """Execute full analysis pipeline and return full unpaginated results."""
+    run_id = run_id or uuid.uuid4().hex
     start_time = time.time()
+    step_timings: Dict[str, float] = {}
+    _log_event("analysis_started", run_id=run_id, source=source, input_rows=len(data))
+
+    def run_step(step_name: str, fn):
+        step_start = time.time()
+        out = fn()
+        duration = round(time.time() - step_start, 6)
+        step_timings[step_name] = duration
+        _log_event("analysis_step_completed", run_id=run_id, source=source, step=step_name, duration_sec=duration)
+        return out
 
     pipeline = DataIngestionPipeline(data)
-    df = pipeline.execute()
+    df = run_step("data_ingestion", lambda: pipeline.execute())
     validation_report = pipeline.get_validation_report()
 
     engineer = FeatureEngineer()
-    df = engineer.engineer_features(df)
+    df = run_step("feature_engineering", lambda: engineer.engineer_features(df))
 
     anomaly_engine = AnomalyDetectionEngine(contamination=options["contamination"])
-    df = anomaly_engine.detect_anomalies(
-        df,
-        auto_tune=options["tune_contamination"],
-        label_column=options.get("label_column"),
-        use_weak_labels=options["use_weak_labels"],
-        contamination_candidates=options.get("contamination_candidates"),
+    df = run_step(
+        "anomaly_detection",
+        lambda: anomaly_engine.detect_anomalies(
+            df,
+            auto_tune=options["tune_contamination"],
+            label_column=options.get("label_column"),
+            use_weak_labels=options["use_weak_labels"],
+            contamination_candidates=options.get("contamination_candidates"),
+        ),
     )
+    anomaly_rate = float(df["is_anomaly"].mean()) if "is_anomaly" in df.columns and len(df) > 0 else 0.0
 
     network_analyzer = NetworkAnalyzer()
-    network_results = network_analyzer.analyze(df)
+    network_results = run_step("network_analysis", lambda: network_analyzer.analyze(df))
 
     assessor = CorruptionRiskAssessor(APP_CONFIG.get("risk_scoring", {}))
-    risk_results = assessor.assess_risk(
-        df,
-        network_results,
-        calibration_config={
-            "enabled": options["calibration_enabled"],
-            "label_column": options.get("label_column"),
-            "use_weak_labels": options["use_weak_labels"],
-        },
+    risk_results = run_step(
+        "risk_scoring",
+        lambda: assessor.assess_risk(
+            df,
+            network_results,
+            calibration_config={
+                "enabled": options["calibration_enabled"],
+                "label_column": options.get("label_column"),
+                "use_weak_labels": options["use_weak_labels"],
+            },
+        ),
     )
 
     execution_time = time.time() - start_time
+    _log_event(
+        "analysis_completed",
+        run_id=run_id,
+        source=source,
+        execution_time_sec=round(execution_time, 6),
+        anomaly_rate=round(anomaly_rate, 6),
+        step_timings=step_timings,
+    )
 
     return {
+        "run_id": run_id,
         "tender_scores": risk_results["tender_scores"].to_dict(orient="records"),
         "contractor_scores": risk_results["contractor_scores"].to_dict(orient="records"),
         "department_scores": risk_results["department_scores"].to_dict(orient="records"),
@@ -332,6 +392,8 @@ def _execute_analysis(data: List[Dict[str, Any]], options: AnalyzeOptionsModel) 
         "anomaly_tuning": anomaly_engine.tuning_report,
         "validation_report": validation_report,
         "execution_time": execution_time,
+        "anomaly_rate": anomaly_rate,
+        "step_timings": step_timings,
         "risk_results_df": risk_results,
         "processed_df": df,
         "network_results_raw": network_results,
@@ -384,7 +446,12 @@ def _run_async_job(job_id: str, request_model: AnalyzeRequestModel):
         JOBS[job_id]["updated_at"] = _now_iso()
 
     try:
-        full_result = _execute_analysis(request_model["data"], request_model["options"])
+        full_result = _execute_analysis(
+            request_model["data"],
+            request_model["options"],
+            run_id=job_id,
+            source="async",
+        )
         reports = None
         if request_model["options"]["generate_report"]:
             run_id = uuid.uuid4().hex
@@ -409,14 +476,24 @@ def _run_async_job(job_id: str, request_model: AnalyzeRequestModel):
             JOBS[job_id]["updated_at"] = _now_iso()
             JOBS[job_id]["result_full"] = full_result
             JOBS[job_id]["reports"] = reports
+        _record_run_metric(
+            run_id=job_id,
+            status="success",
+            execution_time=full_result["execution_time"],
+            anomaly_rate=full_result.get("anomaly_rate", 0.0),
+            step_timings=full_result.get("step_timings", {}),
+            source="async",
+        )
     except Exception as exc:  # pragma: no cover
-        logger.error(f"Async job {job_id} failed: {str(exc)}")
+        err_trace = traceback.format_exc()
+        _log_event("async_job_failed", level="error", job_id=job_id, error=str(exc), traceback=err_trace)
         with JOBS_LOCK:
             if job_id not in JOBS:
                 return
             JOBS[job_id]["status"] = "failed"
             JOBS[job_id]["updated_at"] = _now_iso()
             JOBS[job_id]["error"] = str(exc)
+        _record_run_metric(run_id=job_id, status="failed", error=str(exc), source="async")
 
 
 def _get_job(job_id: str) -> Dict[str, Any]:
@@ -451,6 +528,7 @@ def analyze():
     try:
         payload = request.get_json(silent=True) or {}
         req_model = _validate_analyze_request(payload)
+        run_id = uuid.uuid4().hex
 
         if len(req_model["data"]) > ASYNC_ROW_THRESHOLD:
             return _error_response(
@@ -459,7 +537,7 @@ def analyze():
                 details={"rows": len(req_model["data"]), "async_submit_url": "/api/v1/analyze/submit"},
             )
 
-        full_result = _execute_analysis(req_model["data"], req_model["options"])
+        full_result = _execute_analysis(req_model["data"], req_model["options"], run_id=run_id, source="sync")
         page = req_model["options"]["pagination"]["page"]
         page_size = req_model["options"]["pagination"]["page_size"]
         results_payload = _build_paginated_results(full_result, page, page_size)
@@ -467,6 +545,7 @@ def analyze():
         response_payload = {
             "status": "success",
             "message": "Analysis completed",
+            "run_id": run_id,
             "results": results_payload,
             "validation_report": full_result["validation_report"],
             "execution_time": full_result["execution_time"],
@@ -475,6 +554,10 @@ def analyze():
                 "system_version": SYSTEM_CONFIG.get("version", "unknown"),
                 "model_version": SYSTEM_CONFIG.get("model_version", "unknown"),
                 "config_version": SYSTEM_CONFIG.get("config_version", "unknown"),
+            },
+            "observability": {
+                "step_timings": full_result.get("step_timings", {}),
+                "anomaly_rate": full_result.get("anomaly_rate", 0.0),
             },
         }
 
@@ -494,12 +577,22 @@ def analyze():
                 "download_base_url": f"/api/v1/reports/{run_id}/download",
             }
 
+        _record_run_metric(
+            run_id=run_id,
+            status="success",
+            execution_time=full_result["execution_time"],
+            anomaly_rate=full_result.get("anomaly_rate", 0.0),
+            step_timings=full_result.get("step_timings", {}),
+            source="sync",
+        )
         return jsonify(response_payload)
     except ValueError as exc:
+        _log_event("analysis_validation_error", level="warning", message=str(exc))
         return _error_response(str(exc), code=400)
     except Exception as exc:  # pragma: no cover
-        logger.error(f"Analysis error: {str(exc)}")
-        return _error_response("Internal server error", code=500, details={"exception": str(exc)})
+        err_trace = traceback.format_exc()
+        _log_event("analysis_failed", level="error", error=str(exc), traceback=err_trace)
+        return _error_response("Internal server error", code=500, details={"exception": str(exc), "traceback": err_trace})
 
 
 @app.route("/api/v1/analyze/submit", methods=["POST"])
@@ -588,6 +681,10 @@ def analyze_job_result(job_id):
         "results": results_payload,
         "validation_report": full_result["validation_report"],
         "execution_time": full_result["execution_time"],
+        "observability": {
+            "step_timings": full_result.get("step_timings", {}),
+            "anomaly_rate": full_result.get("anomaly_rate", 0.0),
+        },
     }
     if job.get("reports"):
         response_payload["reports"] = job["reports"]
@@ -673,6 +770,58 @@ def download_all_reports(run_id):
         download_name=f"reports_{run_id}.zip",
         mimetype="application/zip",
     )
+
+
+@app.route("/api/v1/metrics/summary", methods=["GET"])
+def metrics_summary():
+    """Get aggregate run metrics."""
+    with METRICS_LOCK:
+        runs = list(RUN_METRICS)
+    total = len(runs)
+    success_runs = [r for r in runs if r["status"] == "success"]
+    failed_runs = [r for r in runs if r["status"] == "failed"]
+    success_rate = (len(success_runs) / total) if total > 0 else 0.0
+    avg_processing_time = (
+        sum(r["execution_time_sec"] for r in success_runs) / len(success_runs)
+        if success_runs else 0.0
+    )
+    recent = success_runs[-20:]
+    previous = success_runs[-40:-20]
+    recent_anomaly = (sum(r["anomaly_rate"] for r in recent) / len(recent)) if recent else 0.0
+    previous_anomaly = (
+        sum(r["anomaly_rate"] for r in previous) / len(previous)
+    ) if previous else recent_anomaly
+    anomaly_rate_drift = recent_anomaly - previous_anomaly
+
+    return jsonify({
+        "status": "success",
+        "metrics": {
+            "total_runs": total,
+            "success_runs": len(success_runs),
+            "failed_runs": len(failed_runs),
+            "run_success_rate": round(success_rate, 6),
+            "avg_processing_time_sec": round(avg_processing_time, 6),
+            "recent_anomaly_rate": round(recent_anomaly, 6),
+            "previous_anomaly_rate": round(previous_anomaly, 6),
+            "anomaly_rate_drift": round(anomaly_rate_drift, 6),
+        },
+    })
+
+
+@app.route("/api/v1/metrics/runs", methods=["GET"])
+def metrics_runs():
+    """Get run history for dashboard visualizations."""
+    limit = request.args.get("limit", 200)
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        return _error_response("limit must be integer", code=400)
+    if limit < 1 or limit > 2000:
+        return _error_response("limit must be between 1 and 2000", code=400)
+
+    with METRICS_LOCK:
+        runs = list(RUN_METRICS)[-limit:]
+    return jsonify({"status": "success", "runs": runs})
 
 
 if __name__ == "__main__":

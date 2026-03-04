@@ -15,6 +15,7 @@ import os
 import sys
 import io
 import zipfile
+import time
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -50,6 +51,8 @@ def initialize_session_state():
         st.session_state.processed_data = None
     if 'generated_reports' not in st.session_state:
         st.session_state.generated_reports = {}
+    if 'run_metrics' not in st.session_state:
+        st.session_state.run_metrics = []
 
 
 def build_reports(report_type, analysis_results, processed_data):
@@ -114,7 +117,7 @@ def main():
     page = st.sidebar.radio(
         "Navigation",
         ["Overview", "Upload & Analyze", "Risk Analysis", "Network Analysis", 
-         "Contractor Insights", "Department Analysis", "Export Report"]
+         "Contractor Insights", "Department Analysis", "Export Report", "System Metrics"]
     )
     
     st.sidebar.markdown("---")
@@ -135,6 +138,8 @@ def main():
         show_department_analysis()
     elif page == "Export Report":
         show_export_report()
+    elif page == "System Metrics":
+        show_system_metrics()
 
 
 def show_overview():
@@ -275,12 +280,17 @@ def show_upload_analyze():
             # Run analysis button
             if st.button("▶️ Run Complete Analysis", key='run_analysis', use_container_width=True):
                 with st.spinner("Analyzing data... This may take a minute"):
+                    run_started = time.time()
+                    step_timings = {}
                     try:
                         # Feature engineering
+                        step_start = time.time()
                         feature_engineer = FeatureEngineer()
                         df = feature_engineer.engineer_features(df)
+                        step_timings['feature_engineering'] = round(time.time() - step_start, 4)
                         
                         # Anomaly detection
+                        step_start = time.time()
                         anomaly_engine = AnomalyDetectionEngine(contamination=0.05)
                         df = anomaly_engine.detect_anomalies(
                             df,
@@ -288,12 +298,16 @@ def show_upload_analyze():
                             label_column=label_column if label_column else None,
                             use_weak_labels=use_weak_labels
                         )
+                        step_timings['anomaly_detection'] = round(time.time() - step_start, 4)
                         
                         # Network analysis
+                        step_start = time.time()
                         network_analyzer = NetworkAnalyzer()
                         network_results = network_analyzer.analyze(df)
+                        step_timings['network_analysis'] = round(time.time() - step_start, 4)
                         
                         # Risk scoring
+                        step_start = time.time()
                         risk_assessor = CorruptionRiskAssessor()
                         risk_results = risk_assessor.assess_risk(
                             df,
@@ -304,6 +318,7 @@ def show_upload_analyze():
                                 'use_weak_labels': use_weak_labels
                             }
                         )
+                        step_timings['risk_scoring'] = round(time.time() - step_start, 4)
                         
                         st.session_state.analysis_results = {
                             'data': df,
@@ -317,11 +332,27 @@ def show_upload_analyze():
                             st.caption(f"Anomaly tuning: {anomaly_engine.tuning_report}")
                         if 'calibration' in risk_results:
                             st.caption(f"Calibration: {risk_results['calibration']}")
+
+                        st.session_state.run_metrics.append({
+                            'timestamp': datetime.now().isoformat(),
+                            'success': 1,
+                            'execution_time_sec': round(time.time() - run_started, 4),
+                            'anomaly_rate': float(df['is_anomaly'].mean()) if 'is_anomaly' in df.columns and len(df) > 0 else 0.0,
+                            'step_timings': step_timings,
+                        })
                         
                     except Exception as e:
                         st.error(f"Analysis failed: {str(e)}")
                         import traceback
                         st.error(traceback.format_exc())
+                        st.session_state.run_metrics.append({
+                            'timestamp': datetime.now().isoformat(),
+                            'success': 0,
+                            'execution_time_sec': round(time.time() - run_started, 4),
+                            'anomaly_rate': 0.0,
+                            'step_timings': step_timings,
+                            'error': str(e),
+                        })
         
         except ValueError as e:
             st.error(f"Schema validation failed: {str(e)}")
@@ -650,6 +681,44 @@ def show_export_report():
                 use_container_width=True,
                 key="download_all_reports_zip"
             )
+
+
+def show_system_metrics():
+    """Show observability metrics dashboard for local analysis runs."""
+    st.title("📈 System Metrics")
+    if not st.session_state.run_metrics:
+        st.info("No run metrics available yet. Run analysis from 'Upload & Analyze' first.")
+        return
+
+    metrics_df = pd.DataFrame(st.session_state.run_metrics)
+    metrics_df['timestamp'] = pd.to_datetime(metrics_df['timestamp'], errors='coerce')
+    metrics_df = metrics_df.sort_values('timestamp')
+
+    total_runs = len(metrics_df)
+    success_rate = metrics_df['success'].mean() if total_runs > 0 else 0.0
+    avg_time = metrics_df['execution_time_sec'].mean() if total_runs > 0 else 0.0
+    recent = metrics_df.tail(20)
+    previous = metrics_df.iloc[max(0, len(metrics_df)-40):max(0, len(metrics_df)-20)]
+    recent_anomaly = recent['anomaly_rate'].mean() if len(recent) > 0 else 0.0
+    prev_anomaly = previous['anomaly_rate'].mean() if len(previous) > 0 else recent_anomaly
+    drift = recent_anomaly - prev_anomaly
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Runs", total_runs)
+    c2.metric("Run Success Rate", f"{success_rate*100:.1f}%")
+    c3.metric("Avg Processing Time", f"{avg_time:.2f}s")
+    c4.metric("Anomaly Rate Drift", f"{drift:+.4f}")
+
+    st.subheader("Processing Time Trend")
+    fig_time = px.line(metrics_df, x='timestamp', y='execution_time_sec', markers=True, title="Execution Time per Run")
+    st.plotly_chart(fig_time, use_container_width=True)
+
+    st.subheader("Anomaly Rate Trend")
+    fig_anomaly = px.line(metrics_df, x='timestamp', y='anomaly_rate', markers=True, title="Anomaly Rate per Run")
+    st.plotly_chart(fig_anomaly, use_container_width=True)
+
+    st.subheader("Recent Runs")
+    st.dataframe(metrics_df[['timestamp', 'success', 'execution_time_sec', 'anomaly_rate']], use_container_width=True)
 
 
 if __name__ == "__main__":
