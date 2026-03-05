@@ -3,11 +3,9 @@
 
 from pathlib import Path
 import os
-
-
+ 
 def _exists(path: Path) -> str:
     return "OK" if path.exists() else "MISSING"
-
 
 def main():
     project_root = Path(__file__).resolve().parent
