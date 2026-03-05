@@ -20,7 +20,7 @@ source .venv/bin/activate
 streamlit run dashboard/app.py
 ```
 
-- URL: `http://localhost:8501`
+- URL: `http://localhost:8501` 
 
 ## 2) Run Batch Pipeline
 
