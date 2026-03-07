@@ -73,6 +73,7 @@ Generate sample data if needed:
 python data/generate_sample_data.py
 ```
 
+
 ## Docker Deployment
 
 Build and run all services:
