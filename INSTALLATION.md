@@ -94,6 +94,7 @@ Health checks are configured for:
 - Dashboard health endpoint
 - Postgres `pg_isready`
 
+
 ## Security Configuration
 
 Configure in `config/config.yaml`:
