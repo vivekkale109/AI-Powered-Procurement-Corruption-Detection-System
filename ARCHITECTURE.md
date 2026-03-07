@@ -122,6 +122,7 @@ Primary runtime configuration comes from `config/config.yaml`:
 - retention policy
 - PII scrub patterns
 
+
 ## Data Artifacts
 
 Common output paths:
