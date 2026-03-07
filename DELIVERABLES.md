@@ -64,6 +64,7 @@
 - PII scrubbing with configurable regex patterns
 - config/model version metadata included in API/report outputs
 
+
 ## 6) Test Deliverables
 
 Test suite under `tests/` includes:
