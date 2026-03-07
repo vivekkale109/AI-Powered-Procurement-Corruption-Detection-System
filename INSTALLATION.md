@@ -7,6 +7,7 @@
 - `pip`
 - Optional: Docker + Docker Compose
 
+
 ## Local Setup
 
 1. Go to project root:
