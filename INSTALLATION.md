@@ -106,6 +106,7 @@ Configure in `config/config.yaml`:
 
 Report endpoints require API key and/or valid signed download URL.
 
+
 ## Governance Configuration
 
 In `config/config.yaml`:
