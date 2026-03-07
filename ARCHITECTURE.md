@@ -2,6 +2,7 @@
 
 ## System Overview
 
+
 The project is a modular procurement-risk analysis system with three runtime surfaces:
 
 1. Batch pipeline (`src/main.py`)
