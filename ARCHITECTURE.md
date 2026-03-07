@@ -111,6 +111,7 @@ Streamlit interface for:
 - Checker: `benchmarks/regression.py`
 - Enforced in unit test and CI to prevent unintended score drift.
 
+
 ## Configuration-Driven Behavior
 
 Primary runtime configuration comes from `config/config.yaml`:
