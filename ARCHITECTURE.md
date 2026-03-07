@@ -82,6 +82,7 @@ Trend sections in final report:
 - Department risk over time
 - Contractor behavior drift
 
+
 ### 5) Dashboard (`dashboard/app.py`)
 
 Streamlit interface for:
